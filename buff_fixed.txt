@@ -1,0 +1,3381 @@
+local HttpService = game:GetService("HttpService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local CoreGui = game:GetService("CoreGui")
+local StarterGui = game:GetService("StarterGui")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+
+local LocalPlayer = Players.LocalPlayer
+if not LocalPlayer then
+    Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
+    LocalPlayer = Players.LocalPlayer
+end
+
+local RealUsername = LocalPlayer.Name
+local RealDisplayName = LocalPlayer.DisplayName
+local RealUserId = tostring(LocalPlayer.UserId)
+
+local HUB_FOLDER = "MonSkillHub"
+local CONFIG_FILE = HUB_FOLDER .. "/MonSkillHub_Config.json"
+local MEDIA_FOLDER = HUB_FOLDER .. "/Media"
+
+local function ensureFolders()
+    if isfolder and makefolder then
+        local ok1, ex1 = pcall(isfolder, HUB_FOLDER)
+        if ok1 and not ex1 then
+            pcall(makefolder, HUB_FOLDER)
+        end
+        local ok2, ex2 = pcall(isfolder, MEDIA_FOLDER)
+        if ok2 and not ex2 then
+            pcall(makefolder, MEDIA_FOLDER)
+        end
+    end
+end
+
+ensureFolders()
+
+local DefaultConfig = {
+    Rukia = true,
+    Hakari = true,
+    Erwin = true,
+    Wendy = true,
+    Leafa = true,
+    MenuVisible = false,
+    ToggleKey = "M",
+    HideStarIcon = false,
+
+    SpoofIdentity = true,
+    FakeUsername = "HiddenUser",
+    FakeDisplayName = "Streamer",
+    FakeUserId = "1",
+    FakeTitle = "[Hidden Champion]",
+    HideOverhead = false,
+    SpoofOthers = true,
+
+    SpoofGuild = true,
+    RealGuildTag = "1001",
+    FakeGuildTag = "9999",
+    FakeGuildRank = "#9999",
+    SelectedMediaPath = "",
+    SelectedMediaLabel = "None (Original)",
+    GifFps = 12,
+    HideGuildOverhead = false,
+    Mica = false,
+    UIBgPath = "",
+    UIBgLabel = "None",
+    UIBgOpacity = 75,
+
+    SpoofStats = true,
+    FakeLevel = "1",
+    FakeGems = "12,500",
+    FakeGold = "250,000",
+    FakePearls = "1,500",
+
+    SpoofTournament = true,
+    FakePlace = "#1",
+    FakeScore = "192.1204B",
+
+    SpoofInGameScores = true,
+    FakeHighScore = "",
+    FakeCurrentScore = "",
+
+    HidePartyPanel = false,
+    HideRobloxChat = false,
+    ClickToHideMode = false
+}
+
+local config = {}
+for k, v in pairs(DefaultConfig) do
+    config[k] = v
+end
+
+local function saveConfig()
+    ensureFolders()
+    pcall(function()
+        if writefile then
+            local payload = {}
+            for k, defVal in pairs(DefaultConfig) do
+                if type(config[k]) == type(defVal) then
+                    payload[k] = config[k]
+                else
+                    payload[k] = defVal
+                end
+            end
+            writefile(CONFIG_FILE, HttpService:JSONEncode(payload))
+        end
+    end)
+end
+
+local function mergeConfigFromFile(path)
+    if not (readfile and isfile) then
+        return false
+    end
+    local okEx, exists = pcall(isfile, path)
+    if not (okEx and exists) then
+        return false
+    end
+    local okRd, raw = pcall(readfile, path)
+    if not (okRd and type(raw) == "string" and raw ~= "") then
+        return false
+    end
+    local okDec, data = pcall(function()
+        return HttpService:JSONDecode(raw)
+    end)
+    if okDec and type(data) == "table" then
+        for k, defVal in pairs(DefaultConfig) do
+            if data[k] ~= nil and type(data[k]) == type(defVal) then
+                config[k] = data[k]
+            end
+        end
+        return true
+    end
+    return false
+end
+
+local function loadConfig()
+    ensureFolders()
+    local loadedMain = mergeConfigFromFile(CONFIG_FILE)
+    if not loadedMain then
+        local m1 = mergeConfigFromFile("MonSkillHub_Config.json")
+        local m2 = mergeConfigFromFile("HideSpooferConfig.json")
+        if m1 or m2 then
+            saveConfig()
+        end
+    end
+end
+
+loadConfig()
+
+local RUKIA_NAMES = {"rukia_bankai", "rukia_bankai:shiny"}
+local RUKIA_REQUIRED = 3
+local RUKIA_DURATION = 19.8
+local isRukiaRunning = config.Rukia
+
+local HAKARI_NAMES = {"hakari", "hakari:shiny"}
+local HAKARI_REQUIRED = 3
+local HAKARI_DURATION = 30
+local isHakariRunning = config.Hakari
+
+local ERWIN_NAMES = {"erwin", "erwin:shiny"}
+local ERWIN_REQUIRED = 4
+local ERWIN_INTERVAL = 14.0
+local isErwinRunning = config.Erwin
+
+local WENDY_NAMES = {"wendy", "wendy_halloween", "wendy:shiny"}
+local WENDY_REQUIRED = 4
+local WENDY_INTERVAL = 13.5
+local isWendyRunning = config.Wendy
+
+local LEAFA_NAMES = {"leafa", "leafa:shiny"}
+local LEAFA_REQUIRED = 4
+local LEAFA_INTERVAL = 13.5
+local isLeafaRunning = config.Leafa
+
+local placementSeq = {}
+local placementCounter = 0
+local function assignPlacement(unit)
+    if unit and placementSeq[unit] == nil then
+        placementCounter = placementCounter + 1
+        placementSeq[unit] = placementCounter
+    end
+end
+
+task.spawn(function()
+    local folder = workspace:WaitForChild("_UNITS", 30)
+    if not folder then return end
+    for _, u in ipairs(folder:GetChildren()) do assignPlacement(u) end
+    folder.ChildAdded:Connect(function(u)
+        task.wait(0.2)
+        assignPlacement(u)
+    end)
+end)
+
+local endpoints = ReplicatedStorage:WaitForChild("endpoints", 10)
+local clientToServer = endpoints and endpoints:WaitForChild("client_to_server", 10)
+local useActiveRemote = clientToServer and clientToServer:WaitForChild("use_active_attack", 10)
+
+local currentActiveRukia = nil
+local rukiaActiveUntil = 0
+
+local currentActiveHakari = nil
+local hakariActiveUntil = 0
+
+local lockedErwins = {}
+local currentActiveErwin = 0
+local erwinStepRemain = 0
+local erwinThread = nil
+
+local lockedWendys = {}
+local currentActiveWendy = 0
+local wendyStepRemain = 0
+local wendyThread = nil
+
+local lockedLeafas = {}
+local currentActiveLeafa = 0
+local leafaStepRemain = 0
+local leafaThread = nil
+
+local function castSkill(unitInstance)
+    if not (useActiveRemote and unitInstance and unitInstance.Parent) then
+        return false
+    end
+
+    local ok, result = pcall(function()
+        return useActiveRemote:InvokeServer(unitInstance)
+    end)
+
+    return ok and result ~= false
+end
+
+local function getUnitPosition(unit)
+    if unit:IsA("BasePart") then
+        return unit.Position
+    elseif unit:IsA("Model") then
+        local p = unit.PrimaryPart or unit:FindFirstChild("HumanoidRootPart") or unit:FindFirstChildWhichIsA("BasePart")
+        if p then return p.Position end
+    end
+    return nil
+end
+
+local function getRukiaEnergy(unit)
+    local unitPos = getUnitPosition(unit)
+    local ignoreFolder = workspace:FindFirstChild("ignore")
+    if ignoreFolder and unitPos then
+        local closestDist = 8
+        local foundVal = nil
+        for _, obj in ipairs(ignoreFolder:GetChildren()) do
+            if obj:IsA("BasePart") then
+                local unitBar = obj:FindFirstChild("_unit_bar")
+                if unitBar then
+                    local dist = (Vector3.new(obj.Position.X, 0, obj.Position.Z) - Vector3.new(unitPos.X, 0, unitPos.Z)).Magnitude
+                    if dist < closestDist then
+                        local countLabel = unitBar:FindFirstChild("Count", true)
+                        if countLabel and countLabel:IsA("TextLabel") then
+                            local cur, maxVal = countLabel.Text:match("(%d+)%s*/%s*(%d+)")
+                            if cur and maxVal then
+                                local nCur = tonumber(cur)
+                                local nMax = tonumber(maxVal)
+                                if nCur and nMax and nMax > 0 then
+                                    closestDist = dist
+                                    foundVal = math.clamp(math.floor((nCur / nMax) * 100), 0, 100)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        if foundVal then return foundVal end
+    end
+    return 0
+end
+
+local function getHakariEnergy(unit)
+    local unitPos = getUnitPosition(unit)
+    local ignoreFolder = workspace:FindFirstChild("ignore")
+    if ignoreFolder and unitPos then
+        local closestDist = 8
+        local foundVal = nil
+        for _, obj in ipairs(ignoreFolder:GetChildren()) do
+            if obj:IsA("BasePart") then
+                local unitBar = obj:FindFirstChild("_unit_bar")
+                if unitBar then
+                    local dist = (Vector3.new(obj.Position.X, 0, obj.Position.Z) - Vector3.new(unitPos.X, 0, unitPos.Z)).Magnitude
+                    if dist < closestDist then
+                        for _, desc in ipairs(unitBar:GetDescendants()) do
+                            if desc:IsA("TextLabel") and desc.Text:find("%%") then
+                                local num = tonumber(desc.Text:match("(%d+)%%")) or tonumber(desc.Text:match("%d+"))
+                                if num and num <= 100 then
+                                    closestDist = dist
+                                    foundVal = num
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        if foundVal then return foundVal end
+    end
+    for _, desc in ipairs(unit:GetDescendants()) do
+        if desc:IsA("TextLabel") and desc.Text:find("%%") then
+            local num = tonumber(desc.Text:match("(%d+)%%")) or tonumber(desc.Text:match("%d+"))
+            if num and num <= 100 then return num end
+        end
+    end
+    return 0
+end
+
+local function getMyUnitsByNames(namesList, maxCount)
+    local units = {}
+    local unitsFolder = workspace:FindFirstChild("_UNITS")
+    if unitsFolder then
+        for _, unit in ipairs(unitsFolder:GetChildren()) do
+            local isMatch = false
+            for _, name in ipairs(namesList) do
+                if unit.Name:lower() == name:lower() then
+                    isMatch = true
+                    break
+                end
+            end
+            if isMatch then
+                local stats = unit:FindFirstChild("_stats")
+                local isOwner = false
+                if stats and stats:FindFirstChild("player") then
+                    if stats.player.Value == LocalPlayer then isOwner = true end
+                else
+                    isOwner = true
+                end
+                if isOwner then table.insert(units, unit) end
+            end
+        end
+    end
+
+    table.sort(units, function(a, b)
+        local oa = placementSeq[a] or 1e9
+        local ob = placementSeq[b] or 1e9
+        if oa ~= ob then return oa < ob end
+        local posA = getUnitPosition(a) or Vector3.zero
+        local posB = getUnitPosition(b) or Vector3.zero
+        if posA.Z ~= posB.Z then return posA.Z < posB.Z end
+        return posA.X < posB.X
+    end)
+
+    if maxCount and #units > maxCount then
+        local trimmed = {}
+        for i = 1, maxCount do trimmed[i] = units[i] end
+        return trimmed
+    end
+    return units
+end
+
+local OriginalText = setmetatable({}, {__mode = "k"})
+local OriginalImage = setmetatable({}, {__mode = "k"})
+local Updating = setmetatable({}, {__mode = "k"})
+local HookedText = setmetatable({}, {__mode = "k"})
+local HookedImage = setmetatable({}, {__mode = "k"})
+local ResolversText = setmetatable({}, {__mode = "k"})
+local ResolversImage = setmetatable({}, {__mode = "k"})
+local MediaOverlays = setmetatable({}, {__mode = "k"})
+local WatchedGuis = setmetatable({}, {__mode = "k"})
+local HiddenElements = {}
+local SpoofConnections = {}
+
+local CustomMediaState = {
+    Mode = "none",
+    SingleAsset = "",
+    Frames = {},
+    CurrentFrame = 1,
+    Accumulator = 0,
+    Status = ""
+}
+
+local UIBg = {
+    state = {
+        Mode = "none",
+        SingleAsset = "",
+        Frames = {},
+        CurrentFrame = 1,
+        Accumulator = 0,
+        Status = ""
+    },
+    img = nil,
+    filesBox = nil,
+    statusLabel = nil,
+    micaBtn = nil
+}
+
+local function EscapeRegex(str)
+    return (str:gsub("([%^%$%(%)%%%.%[%]%*%+%-%?])", "%%%1"))
+end
+
+local function CaseInsensitive(str)
+    local esc = EscapeRegex(str)
+    return (esc:gsub("%a", function(c)
+        return string.format("[%s%s]", c:lower(), c:upper())
+    end))
+end
+
+local function FormatDmgText(val)
+    if type(val) ~= "string" then
+        return ""
+    end
+    local trimmed = val:match("^%s*(.-)%s*$")
+    if trimmed == "" then
+        return ""
+    end
+    if trimmed:lower():find("dmg", 1, true) then
+        return trimmed
+    end
+    return trimmed .. " DMG"
+end
+
+local function ResolveCustomAssetFunc()
+    if getcustomasset then
+        return getcustomasset
+    end
+    if getsynasset then
+        return getsynasset
+    end
+    return nil
+end
+
+local function GetFolderMediaEntries()
+    ensureFolders()
+    local entries = {}
+    if not listfiles then
+        return entries
+    end
+    local ok, rawList = pcall(listfiles, MEDIA_FOLDER)
+    if not ok or type(rawList) ~= "table" then
+        return entries
+    end
+    table.sort(rawList)
+    for _, rawPath in ipairs(rawList) do
+        local norm = rawPath:gsub("\\", "/")
+        local baseName = norm:match("([^/]+)$") or norm
+        local isDir = false
+        if isfolder then
+            local okD, dRes = pcall(isfolder, rawPath)
+            if okD and dRes then
+                isDir = true
+            end
+        end
+        if isDir then
+            table.insert(entries, {
+                Path = rawPath,
+                Name = "[GIF Folder] " .. baseName,
+                Kind = "folder"
+            })
+        else
+            local low = baseName:lower()
+            if low:match("%.png$") or low:match("%.jpg$") or low:match("%.jpeg$") or low:match("%.webp$") or low:match("%.bmp$") or low:match("%.gif$") then
+                table.insert(entries, {
+                    Path = rawPath,
+                    Name = "[Image] " .. baseName,
+                    Kind = "image"
+                })
+            elseif low:match("%.webm$") or low:match("%.mp4$") then
+                table.insert(entries, {
+                    Path = rawPath,
+                    Name = "[Video] " .. baseName,
+                    Kind = "video"
+                })
+            end
+        end
+    end
+    return entries
+end
+
+local function LoadCustomMediaFromPath(targetPath)
+    CustomMediaState.Mode = "none"
+    CustomMediaState.SingleAsset = ""
+    CustomMediaState.Frames = {}
+    CustomMediaState.CurrentFrame = 1
+    CustomMediaState.Accumulator = 0
+    CustomMediaState.Status = ""
+
+    if type(targetPath) ~= "string" or targetPath == "" then
+        CustomMediaState.Status = "No media selected (original guild icon)."
+        return
+    end
+
+    local toAsset = ResolveCustomAssetFunc()
+    if not toAsset then
+        CustomMediaState.Status = "No asset loader available (need getcustomasset or getsynasset)."
+        return
+    end
+
+    pcall(function()
+        if isfolder and listfiles then
+            local okFolder, existsFolder = pcall(isfolder, targetPath)
+            if okFolder and existsFolder then
+                local okList, files = pcall(listfiles, targetPath)
+                if okList and type(files) == "table" then
+                    table.sort(files)
+                    local loadedFrames = {}
+                    for _, filePath in ipairs(files) do
+                        local low = filePath:lower()
+                        if low:match("%.png$") or low:match("%.jpg$") or low:match("%.jpeg$") or low:match("%.webp$") or low:match("%.bmp$") then
+                            local okA, assetUri = pcall(toAsset, filePath)
+                            if okA and assetUri then
+                                table.insert(loadedFrames, assetUri)
+                            end
+                        end
+                    end
+                    if #loadedFrames > 0 then
+                        CustomMediaState.Mode = "frames"
+                        CustomMediaState.Frames = loadedFrames
+                        CustomMediaState.Status = "Loaded " .. #loadedFrames .. " frames (animated at GIF FPS)."
+                        return
+                    else
+                        CustomMediaState.Status = "Folder has no usable frames (.png/.jpg/.webp/.bmp)."
+                        return
+                    end
+                end
+            end
+        end
+
+        if isfile then
+            local okFile, existsFile = pcall(isfile, targetPath)
+            if okFile and existsFile then
+                local low = targetPath:lower()
+                -- Náº¿u lÃ  file .gif ÄÆ¡n hoáº·c video .webm/.mp4
+                if low:match("%.webm$") or low:match("%.mp4$") then
+                    CustomMediaState.Status = "Local video can't play in Roblox. VideoFrame only accepts an uploaded rbxassetid:// video. Convert the GIF/video into a folder of PNG frames and pick the [GIF Folder] entry instead."
+                    return
+                else
+                    -- Äá»i vá»i file .gif tÄ©nh hoáº·c áº£nh thÃ´ng thÆ°á»ng (.png, .jpg, .gif)
+                    local okAsset, assetUri = pcall(toAsset, targetPath)
+                    if okAsset and assetUri then
+                        CustomMediaState.Mode = "image"
+                        CustomMediaState.SingleAsset = assetUri
+                        if low:match("%.gif$") then
+                            CustomMediaState.Status = "Loaded .gif as a static image (Roblox does not animate .gif). For animation, put PNG frames in a folder and pick [GIF Folder]."
+                        else
+                            CustomMediaState.Status = "Loaded image."
+                        end
+                        return
+                    else
+                        CustomMediaState.Status = "Could not load this file. This executor may not support this format. Use .png/.jpg images or a folder of frames."
+                        return
+                    end
+                end
+            end
+        end
+    end)
+end
+
+UIBg.load = function(targetPath)
+    UIBg.state.Mode = "none"
+    UIBg.state.SingleAsset = ""
+    UIBg.state.Frames = {}
+    UIBg.state.CurrentFrame = 1
+    UIBg.state.Accumulator = 0
+    UIBg.state.Status = ""
+
+    if type(targetPath) ~= "string" or targetPath == "" then
+        UIBg.state.Status = "No UI background selected."
+        return
+    end
+
+    local toAsset = ResolveCustomAssetFunc()
+    if not toAsset then
+        UIBg.state.Status = "No asset loader available (need getcustomasset or getsynasset)."
+        return
+    end
+
+    pcall(function()
+        if isfolder and listfiles then
+            local okFolder, existsFolder = pcall(isfolder, targetPath)
+            if okFolder and existsFolder then
+                local okList, files = pcall(listfiles, targetPath)
+                if okList and type(files) == "table" then
+                    table.sort(files)
+                    local loadedFrames = {}
+                    for _, filePath in ipairs(files) do
+                        local low = filePath:lower()
+                        if low:match("%.png$") or low:match("%.jpg$") or low:match("%.jpeg$") or low:match("%.webp$") or low:match("%.bmp$") then
+                            local okA, assetUri = pcall(toAsset, filePath)
+                            if okA and assetUri then
+                                table.insert(loadedFrames, assetUri)
+                            end
+                        end
+                    end
+                    if #loadedFrames > 0 then
+                        UIBg.state.Mode = "frames"
+                        UIBg.state.Frames = loadedFrames
+                        UIBg.state.Status = "Loaded " .. #loadedFrames .. " frames (animated at GIF FPS)."
+                        return
+                    else
+                        UIBg.state.Status = "Folder has no usable frames (.png/.jpg/.webp/.bmp)."
+                        return
+                    end
+                end
+            end
+        end
+
+        if isfile then
+            local okFile, existsFile = pcall(isfile, targetPath)
+            if okFile and existsFile then
+                local low = targetPath:lower()
+                if low:match("%.webm$") or low:match("%.mp4$") then
+                    UIBg.state.Status = "Local video can't play in Roblox. Use a folder of PNG frames instead."
+                    return
+                else
+                    local okAsset, assetUri = pcall(toAsset, targetPath)
+                    if okAsset and assetUri then
+                        UIBg.state.Mode = "image"
+                        UIBg.state.SingleAsset = assetUri
+                        if low:match("%.gif$") then
+                            UIBg.state.Status = "Loaded .gif as a static image (Roblox does not animate .gif). Use a GIF frame folder for animation."
+                        else
+                            UIBg.state.Status = "Loaded image."
+                        end
+                        return
+                    else
+                        UIBg.state.Status = "Could not load this file. Use .png/.jpg images or a folder of frames."
+                        return
+                    end
+                end
+            end
+        end
+    end)
+end
+
+if config.SelectedMediaPath ~= "" then
+    LoadCustomMediaFromPath(config.SelectedMediaPath)
+end
+
+if config.UIBgPath ~= "" then
+    UIBg.load(config.UIBgPath)
+end
+
+local CLICK_ID = "rbxassetid://0"
+local NEON = Color3.fromRGB(60, 150, 200)
+local BG = Color3.fromRGB(8, 10, 22)
+local CARD = Color3.fromRGB(18, 22, 40)
+
+local GuiParent = CoreGui
+pcall(function()
+    if gethui then
+        GuiParent = gethui()
+    end
+end)
+
+local OldHub = GuiParent:FindFirstChild("MonSkillHub")
+if OldHub then
+    OldHub:Destroy()
+end
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "MonSkillHub"
+screenGui.ResetOnSpawn = false
+screenGui.IgnoreGuiInset = true
+pcall(function() screenGui.Parent = GuiParent end)
+if not screenGui.Parent then screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+
+local function SaveOriginalText(obj)
+    if OriginalText[obj] == nil then
+        OriginalText[obj] = obj.Text
+    end
+end
+
+local function SaveOriginalImage(obj)
+    if OriginalImage[obj] == nil then
+        OriginalImage[obj] = obj.Image
+    end
+end
+
+local function SetSafeText(obj, newText)
+    if not obj or not obj.Parent then
+        return
+    end
+    SaveOriginalText(obj)
+    if obj.Text ~= newText then
+        Updating[obj] = true
+        pcall(function()
+            obj.Text = newText
+        end)
+        Updating[obj] = nil
+    end
+end
+
+local function SetSafeImage(obj, newImg)
+    if not obj or not obj.Parent then
+        return
+    end
+    SaveOriginalImage(obj)
+    if obj.Image ~= newImg then
+        Updating[obj] = true
+        pcall(function()
+            obj.Image = newImg
+        end)
+        Updating[obj] = nil
+    end
+end
+
+local function HookTextLabel(obj, customResolver)
+    if not obj or not (obj:IsA("TextLabel") or obj:IsA("TextButton") or obj:IsA("TextBox")) then
+        return
+    end
+    if obj:IsDescendantOf(screenGui) then
+        return
+    end
+    SaveOriginalText(obj)
+    if customResolver then
+        ResolversText[obj] = customResolver
+    end
+    local resolver = ResolversText[obj]
+    if resolver then
+        SetSafeText(obj, resolver(OriginalText[obj], obj))
+    end
+
+    if not HookedText[obj] then
+        HookedText[obj] = true
+        local conn = obj:GetPropertyChangedSignal("Text"):Connect(function()
+            if Updating[obj] then
+                return
+            end
+            OriginalText[obj] = obj.Text
+            local activeResolver = ResolversText[obj]
+            if activeResolver then
+                SetSafeText(obj, activeResolver(OriginalText[obj], obj))
+            end
+        end)
+        table.insert(SpoofConnections, conn)
+    end
+end
+
+local function HookImageLabel(obj, customResolver)
+    if not obj or not (obj:IsA("ImageLabel") or obj:IsA("ImageButton")) then
+        return
+    end
+    if obj:IsDescendantOf(screenGui) then
+        return
+    end
+    SaveOriginalImage(obj)
+    if customResolver then
+        ResolversImage[obj] = customResolver
+    end
+    local resolver = ResolversImage[obj]
+    if resolver then
+        SetSafeImage(obj, resolver(OriginalImage[obj], obj))
+    end
+
+    if not HookedImage[obj] then
+        HookedImage[obj] = true
+        local conn = obj:GetPropertyChangedSignal("Image"):Connect(function()
+            if Updating[obj] then
+                return
+            end
+            OriginalImage[obj] = obj.Image
+            local activeResolver = ResolversImage[obj]
+            if activeResolver then
+                SetSafeImage(obj, activeResolver(OriginalImage[obj], obj))
+            end
+        end)
+        table.insert(SpoofConnections, conn)
+    end
+end
+
+local function ClearMediaOverlay(targetImg)
+    if not targetImg then
+        return
+    end
+    local existing = MediaOverlays[targetImg]
+    if existing and existing.Parent then
+        existing:Destroy()
+    end
+    MediaOverlays[targetImg] = nil
+    if targetImg.Parent then
+        local named = targetImg:FindFirstChild("CustomGuildMediaOverlay")
+        if named then
+            named:Destroy()
+        end
+    end
+end
+
+local function ApplyMediaOverlayToIcon(iconObj)
+    if not iconObj or not iconObj.Parent or not iconObj:IsA("ImageLabel") then
+        return
+    end
+    SaveOriginalImage(iconObj)
+
+    if not config.SpoofGuild or CustomMediaState.Mode == "none" then
+        ClearMediaOverlay(iconObj)
+        if OriginalImage[iconObj] then
+            SetSafeImage(iconObj, OriginalImage[iconObj])
+        end
+        return
+    end
+
+    local existing = MediaOverlays[iconObj]
+    if existing and existing.Parent then
+        if CustomMediaState.Mode == "video" and not existing:IsA("VideoFrame") then
+            ClearMediaOverlay(iconObj)
+            existing = nil
+        elseif CustomMediaState.Mode ~= "video" and not existing:IsA("ImageLabel") then
+            ClearMediaOverlay(iconObj)
+            existing = nil
+        end
+    else
+        existing = nil
+    end
+
+    if CustomMediaState.Mode == "video" then
+        SetSafeImage(iconObj, "")
+        local vid = existing or Instance.new("VideoFrame")
+        vid.Name = "CustomGuildMediaOverlay"
+        vid.Size = UDim2.fromScale(1, 1)
+        vid.Position = UDim2.fromScale(0, 0)
+        vid.BackgroundTransparency = 1
+        vid.BorderSizePixel = 0
+        vid.ZIndex = iconObj.ZIndex + 5
+        vid.Video = CustomMediaState.SingleAsset
+        vid.Looped = true
+        vid.Volume = 0
+        vid.Playing = true
+        vid.Parent = iconObj
+        pcall(function()
+            vid:Play()
+        end)
+        MediaOverlays[iconObj] = vid
+    elseif CustomMediaState.Mode == "image" then
+        SetSafeImage(iconObj, CustomMediaState.SingleAsset)
+        local img = existing or Instance.new("ImageLabel")
+        img.Name = "CustomGuildMediaOverlay"
+        img.Size = UDim2.fromScale(1, 1)
+        img.Position = UDim2.fromScale(0, 0)
+        img.BackgroundTransparency = 1
+        img.BorderSizePixel = 0
+        img.ScaleType = Enum.ScaleType.Crop
+        img.ZIndex = iconObj.ZIndex + 5
+        img.Image = CustomMediaState.SingleAsset
+        img.Parent = iconObj
+        MediaOverlays[iconObj] = img
+    elseif CustomMediaState.Mode == "frames" and #CustomMediaState.Frames > 0 then
+        local firstFrame = CustomMediaState.Frames[CustomMediaState.CurrentFrame] or CustomMediaState.Frames[1]
+        SetSafeImage(iconObj, firstFrame)
+        local img = existing or Instance.new("ImageLabel")
+        img.Name = "CustomGuildMediaOverlay"
+        img.Size = UDim2.fromScale(1, 1)
+        img.Position = UDim2.fromScale(0, 0)
+        img.BackgroundTransparency = 1
+        img.BorderSizePixel = 0
+        img.ScaleType = Enum.ScaleType.Crop
+        img.ZIndex = iconObj.ZIndex + 5
+        img.Image = firstFrame
+        img.Parent = iconObj
+        MediaOverlays[iconObj] = img
+    end
+end
+
+local function ApplyPartyVisibility()
+    local pGui = LocalPlayer:FindFirstChild("PlayerGui")
+    if not pGui then
+        return
+    end
+    local partyUI = pGui:FindFirstChild("PartyUI")
+    if partyUI and partyUI:IsA("ScreenGui") then
+        partyUI.Enabled = not config.HidePartyPanel
+        local main = partyUI:FindFirstChild("Main")
+        if main and main:IsA("GuiObject") then
+            main.Visible = not config.HidePartyPanel
+        end
+    end
+end
+
+local function ApplyInGameAndResultsSpoof()
+    local pGui = LocalPlayer:FindFirstChild("PlayerGui")
+    if not pGui then
+        return
+    end
+
+    -- Trong ván: chỉ hiển thị giá trị, không thêm hậu tố DMG.
+    -- Màn hình kết quả: giữ định dạng DMG như game gốc.
+    local function FormatScoreForDisplay(val, showDmg)
+        if type(val) ~= "string" then
+            return ""
+        end
+
+        local trimmed = val:match("^%s*(.-)%s*$")
+        if trimmed == "" then
+            return ""
+        end
+
+        if showDmg then
+            return FormatDmgText(trimmed)
+        end
+
+        return (trimmed:gsub("%s*[Dd][Mm][Gg]%s*$", ""))
+    end
+
+    local function ResolveHighScore(showDmg)
+        return function(orig)
+            if not config.SpoofInGameScores then
+                return orig
+            end
+            local rawVal = (config.FakeHighScore ~= "" and config.FakeHighScore) or config.FakeScore
+            local formatted = FormatScoreForDisplay(rawVal, showDmg)
+            return formatted ~= "" and formatted or orig
+        end
+    end
+
+    local function ResolveCurrentScore(showDmg)
+        return function(orig)
+            if not config.SpoofInGameScores or config.FakeCurrentScore == "" then
+                return orig
+            end
+            local formatted = FormatScoreForDisplay(config.FakeCurrentScore, showDmg)
+            return formatted ~= "" and formatted or orig
+        end
+    end
+
+    local tourneyScoreUI = pGui:FindFirstChild("TournamentScoreUI")
+    if tourneyScoreUI then
+        local main = tourneyScoreUI:FindFirstChild("Main")
+        if main then
+            local highV = main:FindFirstChild("HighScore") and main.HighScore:FindFirstChild("V")
+            if highV then
+                HookTextLabel(highV, ResolveHighScore(false))
+            end
+            local scoreV = main:FindFirstChild("Score") and main.Score:FindFirstChild("V")
+            if scoreV then
+                HookTextLabel(scoreV, ResolveCurrentScore(false))
+            end
+        end
+    end
+
+    local resultsUI = pGui:FindFirstChild("ResultsUI")
+    if resultsUI then
+        local middle = resultsUI:FindFirstChild("Holder") and resultsUI.Holder:FindFirstChild("Middle")
+        if middle then
+            local highV = middle:FindFirstChild("HighScore") and middle.HighScore:FindFirstChild("V")
+            if highV then
+                HookTextLabel(highV, ResolveHighScore(true))
+            end
+            local scoreV = middle:FindFirstChild("Score") and middle.Score:FindFirstChild("V")
+            if scoreV then
+                HookTextLabel(scoreV, ResolveCurrentScore(true))
+            end
+        end
+    end
+
+    local tourneyRanking = pGui:FindFirstChild("TournamentRankingUI")
+    if tourneyRanking then
+        local hsV = tourneyRanking:FindFirstChild("LevelSelect")
+            and tourneyRanking.LevelSelect:FindFirstChild("InfoFrame")
+            and tourneyRanking.LevelSelect.InfoFrame:FindFirstChild("ScoreInfo")
+            and tourneyRanking.LevelSelect.InfoFrame.ScoreInfo:FindFirstChild("HighScore")
+            and tourneyRanking.LevelSelect.InfoFrame.ScoreInfo.HighScore:FindFirstChild("V")
+        if hsV then
+            HookTextLabel(hsV, ResolveHighScore(true))
+        end
+    end
+
+    local tourneyResults = pGui:FindFirstChild("TournamentResultsUI")
+    if tourneyResults then
+        local hsV = tourneyResults:FindFirstChild("Main")
+            and tourneyResults.Main:FindFirstChild("Wrapper")
+            and tourneyResults.Main.Wrapper:FindFirstChild("TournamentHolder")
+            and tourneyResults.Main.Wrapper.TournamentHolder:FindFirstChild("ScoreInfo")
+            and tourneyResults.Main.Wrapper.TournamentHolder.ScoreInfo:FindFirstChild("HighScore")
+            and tourneyResults.Main.Wrapper.TournamentHolder.ScoreInfo.HighScore:FindFirstChild("V")
+        if hsV then
+            HookTextLabel(hsV, ResolveHighScore(true))
+        end
+    end
+end
+
+local function ApplyOverheadSpoof()
+    local char = LocalPlayer.Character
+    if not char then
+        return
+    end
+    local head = char:FindFirstChild("Head")
+    if not head then
+        return
+    end
+    local overhead = head:FindFirstChild("_overhead")
+    if not overhead or not overhead:IsA("BillboardGui") then
+        return
+    end
+
+    overhead.Enabled = not config.HideOverhead
+
+    local frame = overhead:FindFirstChild("Frame")
+    if not frame then
+        return
+    end
+
+    local nameFrame = frame:FindFirstChild("Name_Frame")
+    if nameFrame then
+        local nameText = nameFrame:FindFirstChild("Name_Text")
+        if nameText then
+            HookTextLabel(nameText, function(orig)
+                return config.SpoofIdentity and config.FakeDisplayName or orig
+            end)
+        end
+    end
+
+    local titleFrame = frame:FindFirstChild("TitleFrame")
+    if titleFrame then
+        local titleText = titleFrame:FindFirstChild("Title_Text")
+        if titleText then
+            HookTextLabel(titleText, function(orig)
+                return config.SpoofIdentity and config.FakeTitle or orig
+            end)
+        end
+    end
+
+    local levelFrame = frame:FindFirstChild("Level_Frame")
+    if levelFrame then
+        local levelNum = levelFrame:FindFirstChild("Level")
+        local levelPrefix = levelFrame:FindFirstChild("LevelText")
+        if levelPrefix then
+            HookTextLabel(levelPrefix, function(orig)
+                if orig:lower():find("lvl", 1, true) then
+                    return "Lvl"
+                end
+                if config.SpoofStats and config.FakeLevel ~= "" and orig:match("^%s*%d+%s*$") then
+                    return config.FakeLevel
+                end
+                return orig
+            end)
+        end
+        if levelNum then
+            HookTextLabel(levelNum, function(orig)
+                if config.SpoofStats and config.FakeLevel ~= "" then
+                    if orig:lower():find("lvl", 1, true) then
+                        return "Lvl " .. config.FakeLevel
+                    end
+                    return config.FakeLevel
+                end
+                return orig
+            end)
+        end
+    end
+
+    local guildFrame = frame:FindFirstChild("Guild_Frame")
+    if guildFrame then
+        guildFrame.Visible = not config.HideGuildOverhead
+        for _, desc in ipairs(guildFrame:GetDescendants()) do
+            if desc:IsA("TextLabel") then
+                if desc.Parent and desc.Parent.Name == "_rank" then
+                    HookTextLabel(desc, function(orig)
+                        return config.SpoofGuild and config.FakeGuildRank or orig
+                    end)
+                elseif desc.Name == "Name_Text" then
+                    HookTextLabel(desc, function(orig)
+                        return config.SpoofGuild and config.FakeGuildTag or orig
+                    end)
+                end
+            elseif desc:IsA("ImageLabel") and desc.Name == "GuildIcon" then
+                ApplyMediaOverlayToIcon(desc)
+            end
+        end
+    end
+end
+
+local function ApplySpecificPlayerGuiSpoof()
+    local pGui = LocalPlayer:FindFirstChild("PlayerGui")
+    if not pGui then
+        return
+    end
+
+    ApplyPartyVisibility()
+    ApplyInGameAndResultsSpoof()
+
+    local partyUI = pGui:FindFirstChild("PartyUI")
+    if partyUI then
+        local main = partyUI:FindFirstChild("Main")
+        if main then
+            local title = main:FindFirstChild("Title")
+            if title then
+                HookTextLabel(title, function(orig)
+                    return config.SpoofIdentity and ("@" .. config.FakeUsername .. "'s Party") or orig
+                end)
+            end
+            local members = main:FindFirstChild("Members")
+            if members then
+                for _, pf in ipairs(members:GetChildren()) do
+                    if pf.Name == "PlayerFrame" then
+                        local pName = pf:FindFirstChild("name")
+                        local pMain = pf:FindFirstChild("Main")
+                        local pLvl = pMain and pMain:FindFirstChild("Level")
+                        if pName then
+                            SaveOriginalText(pName)
+                            local origPlayerName = OriginalText[pName]
+                            if origPlayerName == RealDisplayName or origPlayerName == RealUsername then
+                                HookTextLabel(pName, function(orig)
+                                    return config.SpoofIdentity and config.FakeDisplayName or orig
+                                end)
+                                if pLvl then
+                                    HookTextLabel(pLvl, function(orig)
+                                        return (config.SpoofStats and config.FakeLevel ~= "") and config.FakeLevel or orig
+                                    end)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    local spawnUnits = pGui:FindFirstChild("spawn_units")
+    if spawnUnits then
+        local lives = spawnUnits:FindFirstChild("Lives")
+        if lives then
+            local desc = lives:FindFirstChild("Main") and lives.Main:FindFirstChild("Desc")
+            local lvlLbl = desc and desc:FindFirstChild("Level")
+            if lvlLbl then
+                HookTextLabel(lvlLbl, function(orig)
+                    if config.SpoofStats and config.FakeLevel ~= "" then
+                        local replaced, count = orig:gsub("([Ll][Ee][Vv][Ee][Ll]%s*)%d+", "%1" .. config.FakeLevel)
+                        if count > 0 then
+                            return replaced
+                        end
+                        return "Level " .. config.FakeLevel .. " [0/100]"
+                    end
+                    return orig
+                end)
+            end
+
+            local resFolder = lives:FindFirstChild("Frame") and lives.Frame:FindFirstChild("Resource")
+            if resFolder then
+                for _, child in ipairs(resFolder:GetChildren()) do
+                    local valLbl = child:FindFirstChild("Level") or child:FindFirstChild("Amount") or child:FindFirstChildOfClass("TextLabel")
+                    if valLbl then
+                        local cName = child.Name:lower()
+                        HookTextLabel(valLbl, function(orig)
+                            if not config.SpoofStats then
+                                return orig
+                            end
+                            if cName:find("pearl") and config.FakePearls ~= "" then
+                                return config.FakePearls
+                            elseif (cName:find("gem") or cName:find("diamond")) and config.FakeGems ~= "" then
+                                return config.FakeGems
+                            elseif (cName:find("gold") or cName:find("coin") or cName:find("money") or cName:find("yen")) and config.FakeGold ~= "" then
+                                return config.FakeGold
+                            end
+                            return orig
+                        end)
+                    end
+                end
+            end
+        end
+    end
+
+    local profileUI = pGui:FindFirstChild("ProfileGUI")
+    if profileUI then
+        local banner = profileUI:FindFirstChild("Main") and profileUI.Main:FindFirstChild("ProfileBanner")
+        if banner then
+            local pName = banner:FindFirstChild("PlayerName")
+            if pName then
+                HookTextLabel(pName, function(orig)
+                    return config.SpoofIdentity and ("@" .. config.FakeUsername) or orig
+                end)
+            end
+            local xpLvl = banner:FindFirstChild("XP") and banner.XP:FindFirstChild("Desc") and banner.XP.Desc:FindFirstChild("Level")
+            if xpLvl then
+                HookTextLabel(xpLvl, function(orig)
+                    if config.SpoofStats and config.FakeLevel ~= "" then
+                        local replaced, count = orig:gsub("([Ll][Ee][Vv][Ee][Ll]%s*)%d+", "%1" .. config.FakeLevel)
+                        if count > 0 then
+                            return replaced
+                        end
+                        return "Level " .. config.FakeLevel .. " [0/100]"
+                    end
+                    return orig
+                end)
+            end
+        end
+    end
+
+    local guildsUI = pGui:FindFirstChild("GuildsUI")
+    if guildsUI then
+        for _, desc in ipairs(guildsUI:GetDescendants()) do
+            if desc:IsA("ImageLabel") and desc.Name == "GuildIcon" then
+                if desc.Parent and (desc.Parent.Name == "GuildMain" or desc.Parent.Name == "ProfileBanner") then
+                    ApplyMediaOverlayToIcon(desc)
+                end
+            elseif desc:IsA("TextLabel") or desc:IsA("TextBox") then
+                HookTextLabel(desc, function(orig)
+                    local out = orig
+                    if config.SpoofIdentity and RealUsername ~= "" then
+                        out = out:gsub(CaseInsensitive(RealUsername), config.FakeUsername)
+                    end
+                    if config.SpoofGuild and config.RealGuildTag ~= "" and config.FakeGuildTag ~= "" then
+                        out = out:gsub("%[" .. EscapeRegex(config.RealGuildTag) .. "%]", "[" .. config.FakeGuildTag .. "]")
+                        if out == config.RealGuildTag then
+                            out = config.FakeGuildTag
+                        end
+                    end
+                    return out
+                end)
+            end
+        end
+    end
+end
+
+local function ApplyBoardRowData(rowFrame, data, isSpotlightTop)
+    if not rowFrame or not rowFrame:IsA("Frame") then
+        return
+    end
+    local placeLbl = rowFrame:FindFirstChild("Place")
+    local userLbl = rowFrame:FindFirstChild("Username")
+    local amtLbl = rowFrame:FindFirstChild("Amount")
+    local iconLbl = rowFrame:FindFirstChild("PlayerIcon")
+
+    if placeLbl then
+        HookTextLabel(placeLbl, function()
+            return data.Place
+        end)
+    end
+    if userLbl then
+        HookTextLabel(userLbl, function()
+            return data.Username
+        end)
+    end
+    if amtLbl then
+        HookTextLabel(amtLbl, function()
+            if data.IsLocal and isSpotlightTop and not data.Amount:find("DMG", 1, true) then
+                return data.Amount .. " DMG"
+            end
+            return data.Amount
+        end)
+    end
+    if iconLbl then
+        HookImageLabel(iconLbl, function()
+            return data.Icon
+        end)
+    end
+end
+
+local function RestoreBoardRowOriginal(rowFrame)
+    if not rowFrame or not rowFrame:IsA("Frame") then
+        return
+    end
+    for _, name in ipairs({"Place", "Username", "Amount"}) do
+        local lbl = rowFrame:FindFirstChild(name)
+        if lbl then
+            ResolversText[lbl] = nil
+            if OriginalText[lbl] ~= nil then
+                SetSafeText(lbl, OriginalText[lbl])
+            end
+        end
+    end
+    local iconLbl = rowFrame:FindFirstChild("PlayerIcon")
+    if iconLbl then
+        ResolversImage[iconLbl] = nil
+        if OriginalImage[iconLbl] ~= nil then
+            SetSafeImage(iconLbl, OriginalImage[iconLbl])
+        end
+    end
+end
+
+local function ProcessSingleLeaderboard(board)
+    if not board then
+        return
+    end
+    local container = board:FindFirstChild("Main")
+        and board.Main:FindFirstChild("Wrapper")
+        and board.Main.Wrapper:FindFirstChild("Container")
+    if not container then
+        return
+    end
+
+    local topScroll = container:FindFirstChild("Top")
+    local yourRow = container:FindFirstChild("YourRow")
+
+    if not config.SpoofTournament then
+        if topScroll then
+            for _, child in ipairs(topScroll:GetChildren()) do
+                if child:IsA("Frame") then
+                    RestoreBoardRowOriginal(child)
+                end
+            end
+        end
+        if yourRow then
+            RestoreBoardRowOriginal(yourRow)
+        end
+        return
+    end
+
+    local orderedFrames = {}
+    if topScroll then
+        local spotlight = topScroll:FindFirstChild("Top")
+        if spotlight and spotlight:IsA("Frame") then
+            table.insert(orderedFrames, {Frame = spotlight, IsSpotlight = true, SortRank = 1})
+        end
+        local listRows = {}
+        for _, child in ipairs(topScroll:GetChildren()) do
+            if child:IsA("Frame") and child.Name == "LeaderboardFrameLevelSelect" then
+                local pLbl = child:FindFirstChild("Place")
+                if pLbl then
+                    SaveOriginalText(pLbl)
+                end
+                local origPlace = pLbl and OriginalText[pLbl] or "#999"
+                local rankNum = tonumber(origPlace:match("%d+")) or 999
+                table.insert(listRows, {Frame = child, IsSpotlight = false, SortRank = rankNum})
+            end
+        end
+        table.sort(listRows, function(a, b)
+            if a.SortRank ~= b.SortRank then
+                return a.SortRank < b.SortRank
+            end
+            return a.Frame.LayoutOrder < b.Frame.LayoutOrder
+        end)
+        for _, entry in ipairs(listRows) do
+            table.insert(orderedFrames, entry)
+        end
+    end
+
+    local realEntries = {}
+    for _, item in ipairs(orderedFrames) do
+        local f = item.Frame
+        local uLbl = f:FindFirstChild("Username")
+        local aLbl = f:FindFirstChild("Amount")
+        local pLbl = f:FindFirstChild("Place")
+        local iLbl = f:FindFirstChild("PlayerIcon")
+        if uLbl then SaveOriginalText(uLbl) end
+        if aLbl then SaveOriginalText(aLbl) end
+        if pLbl then SaveOriginalText(pLbl) end
+        if iLbl then SaveOriginalImage(iLbl) end
+
+        local origUser = uLbl and OriginalText[uLbl] or ""
+        local isSelf = origUser:lower():find(RealUsername:lower(), 1, true) ~= nil
+        if not isSelf then
+            table.insert(realEntries, {
+                IsLocal = false,
+                Username = "@Unknown",
+                Amount = "No. No. No",
+                Icon = "rbxthumb://type=AvatarHeadShot&id=1&w=420&h=420"
+            })
+        end
+    end
+
+    local targetRank = tonumber(config.FakePlace:match("%d+")) or 1
+    if targetRank < 1 then
+        targetRank = 1
+    end
+
+    local localEntry = {
+        IsLocal = true,
+        Username = "@Unknown",
+        Amount = config.FakeScore ~= "" and config.FakeScore or "0",
+        Icon = "rbxthumb://type=AvatarHeadShot&id=" .. (config.FakeUserId ~= "" and config.FakeUserId or "1") .. "&w=420&h=420"
+    }
+
+    local insertIdx = math.min(targetRank, #realEntries + 1)
+    table.insert(realEntries, insertIdx, localEntry)
+
+    for idx, item in ipairs(orderedFrames) do
+        local slotData = realEntries[idx]
+        if slotData then
+            local rowPayload = {
+                IsLocal = slotData.IsLocal,
+                Place = "#" .. tostring(idx),
+                Username = slotData.Username,
+                Amount = slotData.Amount,
+                Icon = slotData.Icon
+            }
+            ApplyBoardRowData(item.Frame, rowPayload, item.IsSpotlight)
+        end
+    end
+
+    if yourRow and yourRow:IsA("Frame") then
+        local yourPayload = {
+            IsLocal = true,
+            Place = "#" .. tostring(targetRank),
+            Username = "@Unknown",
+            Amount = config.FakeScore ~= "" and config.FakeScore or "0",
+            Icon = "rbxthumb://type=AvatarHeadShot&id=" .. (config.FakeUserId ~= "" and config.FakeUserId or "1") .. "&w=420&h=420"
+        }
+        ApplyBoardRowData(yourRow, yourPayload, false)
+    end
+end
+
+local function ApplyTournamentBoardsSpoof()
+    local wsBoard = workspace:FindFirstChild("_TOURNAMENT")
+        and workspace._TOURNAMENT:FindFirstChild("leaderboard")
+        and workspace._TOURNAMENT.leaderboard:FindFirstChild("main")
+        and workspace._TOURNAMENT.leaderboard.main:FindFirstChild("Surface")
+        and workspace._TOURNAMENT.leaderboard.main.Surface:FindFirstChild("Leaderboard")
+
+    if wsBoard then
+        ProcessSingleLeaderboard(wsBoard)
+    end
+
+    local pGui = LocalPlayer:FindFirstChild("PlayerGui")
+    local uiBoard = pGui
+        and pGui:FindFirstChild("TournamentRankingUI")
+        and pGui.TournamentRankingUI:FindFirstChild("Leaderboard")
+    if uiBoard then
+        ProcessSingleLeaderboard(uiBoard)
+    end
+end
+
+local function FullRescanAll()
+    ApplyOverheadSpoof()
+    ApplySpecificPlayerGuiSpoof()
+    ApplyTournamentBoardsSpoof()
+end
+
+local function RestoreAllSpoofOriginals()
+    for obj, orig in pairs(OriginalText) do
+        if obj and obj.Parent then
+            ResolversText[obj] = nil
+            Updating[obj] = true
+            pcall(function()
+                obj.Text = orig
+            end)
+            Updating[obj] = nil
+        end
+    end
+    for obj, orig in pairs(OriginalImage) do
+        if obj and obj.Parent then
+            ResolversImage[obj] = nil
+            Updating[obj] = true
+            pcall(function()
+                obj.Image = orig
+            end)
+            Updating[obj] = nil
+        end
+    end
+    for targetImg, _ in pairs(MediaOverlays) do
+        ClearMediaOverlay(targetImg)
+    end
+    for frame, _ in pairs(HiddenElements) do
+        if frame and frame.Parent then
+            frame.Visible = true
+        end
+    end
+    HiddenElements = {}
+
+    local char = LocalPlayer.Character
+    local head = char and char:FindFirstChild("Head")
+    local overhead = head and head:FindFirstChild("_overhead")
+    if overhead then
+        overhead.Enabled = true
+        local gf = overhead:FindFirstChild("Frame") and overhead.Frame:FindFirstChild("Guild_Frame")
+        if gf then
+            gf.Visible = true
+        end
+    end
+
+    local pGui = LocalPlayer:FindFirstChild("PlayerGui")
+    local partyUI = pGui and pGui:FindFirstChild("PartyUI")
+    if partyUI and partyUI:IsA("ScreenGui") then
+        partyUI.Enabled = true
+        local main = partyUI:FindFirstChild("Main")
+        if main and main:IsA("GuiObject") then
+            main.Visible = true
+        end
+    end
+
+    pcall(function()
+        StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.Chat, true)
+    end)
+end
+
+local clickSound = Instance.new("Sound")
+clickSound.SoundId = CLICK_ID
+clickSound.Volume = 0.5
+clickSound.Parent = screenGui
+local function playClick()
+    if CLICK_ID ~= "rbxassetid://0" then
+        pcall(function() clickSound:Play() end)
+    end
+end
+
+local mainFrame = Instance.new("Frame")
+mainFrame.Size = UDim2.new(0, 470, 0, 372)
+mainFrame.Position = UDim2.new(0.5, -235, 0.06, 0)
+mainFrame.BackgroundColor3 = BG
+mainFrame.BorderSizePixel = 0
+mainFrame.Active = true
+mainFrame.Draggable = true
+mainFrame.Visible = config.MenuVisible
+mainFrame.Parent = screenGui
+local mc = Instance.new("UICorner")
+mc.CornerRadius = UDim.new(0, 4)
+mc.Parent = mainFrame
+local ms = Instance.new("UIStroke")
+ms.Thickness = 2
+ms.Color = NEON
+ms.Transparency = 0.3
+ms.Parent = mainFrame
+
+UIBg.img = Instance.new("ImageLabel")
+UIBg.img.Name = "UIBackground"
+UIBg.img.Size = UDim2.new(1, 0, 1, 0)
+UIBg.img.Position = UDim2.new(0, 0, 0, 0)
+UIBg.img.BackgroundTransparency = 1
+UIBg.img.BorderSizePixel = 0
+UIBg.img.ScaleType = Enum.ScaleType.Crop
+UIBg.img.ZIndex = 1
+UIBg.img.ImageTransparency = 0.3
+UIBg.img.Visible = showBg
+    UIBg.img.Active = false
+UIBg.img.Parent = mainFrame
+do
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, 4)
+    c.Parent = UIBg.img
+end
+
+UIBg.applyBackground = function()
+    local showBg = (config.Mica == true) and (UIBg.state.Mode ~= "none")
+    UIBg.img.Visible = showBg
+    if not showBg then
+        return
+    end
+    local img
+    if UIBg.state.Mode == "frames" and #UIBg.state.Frames > 0 then
+        img = UIBg.state.Frames[UIBg.state.CurrentFrame] or UIBg.state.Frames[1]
+    elseif UIBg.state.Mode == "image" then
+        img = UIBg.state.SingleAsset
+    end
+    if img then
+        UIBg.img.Image = img
+    end
+    local opacity = tonumber(config.UIBgOpacity)
+    if type(opacity) ~= "number" then
+        opacity = 75
+    end
+    if opacity < 0 then opacity = 0 end
+    if opacity > 100 then opacity = 100 end
+    UIBg.img.ImageTransparency = 1 - (opacity / 100)
+end
+
+UIBg.originals = {}
+UIBg.applyMica = function()
+    local on = config.Mica == true
+    for _, obj in ipairs(mainFrame:GetDescendants()) do
+        if obj:IsA("Frame") or obj:IsA("ScrollingFrame") or obj:IsA("TextButton") or obj:IsA("TextBox") then
+            if on then
+                if UIBg.originals[obj] == nil then
+                    UIBg.originals[obj] = obj.BackgroundTransparency
+                end
+                local orig = UIBg.originals[obj]
+                local t = orig + (1 - orig) * 0.5
+                if obj.BackgroundTransparency ~= t then
+                    obj.BackgroundTransparency = t
+                end
+            else
+                if UIBg.originals[obj] ~= nil then
+                    obj.BackgroundTransparency = UIBg.originals[obj]
+                end
+            end
+        end
+    end
+    UIBg.applyBackground()
+end
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(0, 205, 0, 28)
+title.Position = UDim2.new(0, 12, 0, 6)
+title.BackgroundTransparency = 1
+title.Text = "AUTO SKILL"
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.TextStrokeColor3 = NEON
+title.TextStrokeTransparency = 0
+title.TextSize = 15
+title.Font = Enum.Font.GothamBlack
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Parent = mainFrame
+
+local buttonRow = Instance.new("Frame")
+buttonRow.Size = UDim2.new(0, 242, 0, 24)
+buttonRow.Position = UDim2.new(1, -250, 0, 8)
+buttonRow.BackgroundTransparency = 1
+buttonRow.Parent = mainFrame
+
+local function styleButton(btn, color)
+    local accent = color:Lerp(Color3.new(1, 1, 1), 0.3)
+    local baseSize = btn.Size
+    btn.MouseEnter:Connect(function()
+        TweenService:Create(btn, TweenInfo.new(0.12), { BackgroundColor3 = accent }):Play()
+        TweenService:Create(btn, TweenInfo.new(0.12), { Size = UDim2.new(baseSize.X.Scale, baseSize.X.Offset + 3, baseSize.Y.Scale, baseSize.Y.Offset + 2) }):Play()
+    end)
+    btn.MouseLeave:Connect(function()
+        TweenService:Create(btn, TweenInfo.new(0.12), { BackgroundColor3 = color }):Play()
+        TweenService:Create(btn, TweenInfo.new(0.12), { Size = baseSize }):Play()
+    end)
+    btn.MouseButton1Click:Connect(playClick)
+end
+
+local function makeButton(text, color, x, w)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(0, w, 0, 24)
+    b.Position = UDim2.new(0, x, 0, 0)
+    b.BackgroundColor3 = color
+    b.BorderSizePixel = 0
+    b.Text = text
+    b.TextColor3 = Color3.fromRGB(255, 255, 255)
+    b.TextSize = 10
+    b.Font = Enum.Font.GothamBold
+    b.AutoButtonColor = false
+    b.Parent = buttonRow
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, 4)
+    c.Parent = b
+    local s = Instance.new("UIStroke")
+    s.Thickness = 1
+    s.Color = color:Lerp(Color3.new(1, 1, 1), 0.4)
+    s.Parent = b
+    styleButton(b, color)
+    return b
+end
+
+local buffBtn = makeButton("BUFF", Color3.fromRGB(0, 165, 120), 0, 72)
+local hideFakeBtn = makeButton("HIDE/FAKE", Color3.fromRGB(45, 110, 210), 76, 84)
+local settingsBtn = makeButton("SETTINGS", Color3.fromRGB(160, 110, 30), 164, 78)
+
+local scrollList = Instance.new("ScrollingFrame")
+scrollList.Size = UDim2.new(1, -16, 0, 310)
+scrollList.Position = UDim2.new(0, 8, 0, 38)
+scrollList.BackgroundTransparency = 1
+scrollList.BorderSizePixel = 0
+scrollList.ScrollBarThickness = 3
+scrollList.ScrollBarImageColor3 = NEON
+scrollList.CanvasSize = UDim2.new(0, 0, 0, 474)
+scrollList.Parent = mainFrame
+
+local function createSection(parent, x, y, w, h, titleText, titleColor, rowCount, defaultState)
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(w, 0, 0, h)
+    frame.Position = UDim2.new(x, 0, 0, y)
+    frame.BackgroundColor3 = CARD
+    frame.BorderSizePixel = 0
+    frame.Parent = parent
+    local fc = Instance.new("UICorner")
+    fc.CornerRadius = UDim.new(0, 6)
+    fc.Parent = frame
+    local fs = Instance.new("UIStroke")
+    fs.Thickness = 1
+    fs.Color = titleColor
+    fs.Transparency = 0.45
+    fs.Parent = frame
+    local secTitle = Instance.new("TextLabel")
+    secTitle.Size = UDim2.new(1, -58, 0, 20)
+    secTitle.Position = UDim2.new(0, 6, 0, 4)
+    secTitle.BackgroundTransparency = 1
+    secTitle.Text = titleText
+    secTitle.TextColor3 = titleColor
+    secTitle.TextSize = 10
+    secTitle.Font = Enum.Font.GothamBold
+    secTitle.TextXAlignment = Enum.TextXAlignment.Left
+    secTitle.Parent = frame
+    local toggleBtn = Instance.new("TextButton")
+    toggleBtn.Size = UDim2.new(0, 48, 0, 18)
+    toggleBtn.Position = UDim2.new(1, -52, 0, 4)
+    toggleBtn.BackgroundColor3 = defaultState and Color3.fromRGB(0, 170, 100) or Color3.fromRGB(150, 40, 50)
+    toggleBtn.Text = defaultState and "ON" or "OFF"
+    toggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    toggleBtn.TextSize = 9
+    toggleBtn.Font = Enum.Font.GothamBold
+    toggleBtn.Parent = frame
+    local tc = Instance.new("UICorner")
+    tc.CornerRadius = UDim.new(0, 4)
+    tc.Parent = toggleBtn
+    local uc = Instance.new("Frame")
+    uc.Size = UDim2.new(1, -10, 0, rowCount * 23)
+    uc.Position = UDim2.new(0, 5, 0, 26)
+    uc.BackgroundTransparency = 1
+    uc.Parent = frame
+    local unitRows = {}
+    for i = 1, rowCount do
+        local row = Instance.new("Frame")
+        row.Size = UDim2.new(1, 0, 0, 20)
+        row.Position = UDim2.new(0, 0, 0, (i - 1) * 23)
+        row.BackgroundColor3 = Color3.fromRGB(24, 30, 54)
+        row.BorderSizePixel = 0
+        row.Parent = uc
+        local rc = Instance.new("UICorner")
+        rc.CornerRadius = UDim.new(0, 4)
+        rc.Parent = row
+        local circle = Instance.new("Frame")
+        circle.Size = UDim2.new(0, 9, 0, 9)
+        circle.Position = UDim2.new(0, 5, 0.5, -4.5)
+        circle.BackgroundColor3 = Color3.fromRGB(45, 55, 80)
+        circle.BorderSizePixel = 0
+        circle.Parent = row
+        local cc = Instance.new("UICorner")
+        cc.CornerRadius = UDim.new(1, 0)
+        cc.Parent = circle
+        local barBg = Instance.new("Frame")
+        barBg.Size = UDim2.new(1, -56, 0, 6)
+        barBg.Position = UDim2.new(0, 18, 0.5, -3)
+        barBg.BackgroundColor3 = Color3.fromRGB(10, 14, 28)
+        barBg.BorderSizePixel = 0
+        barBg.Parent = row
+        local bc = Instance.new("UICorner")
+        bc.CornerRadius = UDim.new(0, 3)
+        bc.Parent = barBg
+        local barFill = Instance.new("Frame")
+        barFill.Size = UDim2.new(0, 0, 1, 0)
+        barFill.BackgroundColor3 = titleColor
+        barFill.BorderSizePixel = 0
+        barFill.Parent = barBg
+        local bfc = Instance.new("UICorner")
+        bfc.CornerRadius = UDim.new(0, 3)
+        bfc.Parent = barFill
+        local percentText = Instance.new("TextLabel")
+        percentText.Size = UDim2.new(0, 34, 1, 0)
+        percentText.Position = UDim2.new(1, -36, 0, 0)
+        percentText.BackgroundTransparency = 1
+        percentText.Text = "--"
+        percentText.TextColor3 = Color3.fromRGB(160, 180, 210)
+        percentText.TextSize = 9
+        percentText.Font = Enum.Font.GothamSemibold
+        percentText.Parent = row
+        table.insert(unitRows, { circle = circle, barFill = barFill, percentText = percentText })
+    end
+    local statusBox = Instance.new("Frame")
+    statusBox.Size = UDim2.new(1, -10, 0, 31)
+    statusBox.Position = UDim2.new(0, 5, 1, -35)
+    statusBox.BackgroundColor3 = Color3.fromRGB(10, 14, 28)
+    statusBox.BorderSizePixel = 0
+    statusBox.Parent = frame
+    local sc = Instance.new("UICorner")
+    sc.CornerRadius = UDim.new(0, 4)
+    sc.Parent = statusBox
+    local countdownLabel = Instance.new("TextLabel")
+    countdownLabel.Size = UDim2.new(1, -4, 0, 15)
+    countdownLabel.Position = UDim2.new(0, 2, 0, 1)
+    countdownLabel.BackgroundTransparency = 1
+    countdownLabel.Text = "Ready"
+    countdownLabel.TextColor3 = titleColor
+    countdownLabel.TextSize = 9
+    countdownLabel.Font = Enum.Font.GothamBold
+    countdownLabel.TextXAlignment = Enum.TextXAlignment.Left
+    countdownLabel.Parent = statusBox
+    local stateLabel = Instance.new("TextLabel")
+    stateLabel.Size = UDim2.new(1, -4, 0, 12)
+    stateLabel.Position = UDim2.new(0, 2, 0, 15)
+    stateLabel.BackgroundTransparency = 1
+    stateLabel.Text = "Idle"
+    stateLabel.TextColor3 = Color3.fromRGB(140, 160, 190)
+    stateLabel.TextSize = 8
+    stateLabel.Font = Enum.Font.Gotham
+    stateLabel.TextXAlignment = Enum.TextXAlignment.Left
+    stateLabel.Parent = statusBox
+    return { toggleBtn = toggleBtn, unitRows = unitRows, countdownLabel = countdownLabel, stateLabel = stateLabel }
+end
+
+local rukiaUI = createSection(scrollList, 0.015, 4, 0.48, 134, "RUKIA BANKAI", Color3.fromRGB(80, 190, 255), 3, isRukiaRunning)
+local hakariUI = createSection(scrollList, 0.505, 4, 0.48, 134, "HAKARI JACKPOT", Color3.fromRGB(100, 255, 180), 3, isHakariRunning)
+local erwinUI = createSection(scrollList, 0.015, 144, 0.48, 158, "ERWIN COMMANDER", Color3.fromRGB(255, 185, 30), 4, isErwinRunning)
+local wendyUI = createSection(scrollList, 0.505, 144, 0.48, 158, "WENDY WINDSONG", Color3.fromRGB(80, 220, 255), 4, isWendyRunning)
+local leafaUI = createSection(scrollList, 0.015, 308, 0.48, 158, "LEAFA SYLVAN", Color3.fromRGB(130, 255, 120), 4, isLeafaRunning)
+
+local hideFakeScroll = Instance.new("ScrollingFrame")
+hideFakeScroll.Size = UDim2.new(1, -16, 0, 310)
+hideFakeScroll.Position = UDim2.new(0, 8, 0, 38)
+hideFakeScroll.BackgroundTransparency = 1
+hideFakeScroll.BorderSizePixel = 0
+hideFakeScroll.ScrollBarThickness = 3
+hideFakeScroll.ScrollBarImageColor3 = NEON
+hideFakeScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+hideFakeScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+hideFakeScroll.Visible = false
+hideFakeScroll.Parent = mainFrame
+
+local treeListLayout = Instance.new("UIListLayout")
+treeListLayout.Padding = UDim.new(0, 5)
+treeListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+treeListLayout.Parent = hideFakeScroll
+
+local treePad = Instance.new("UIPadding")
+treePad.PaddingTop = UDim.new(0, 2)
+treePad.PaddingBottom = UDim.new(0, 8)
+treePad.PaddingRight = UDim.new(0, 6)
+treePad.Parent = hideFakeScroll
+
+local SyncSpoofUi = {}
+
+local function createDexCategory(order, categoryTitle, accentColor, defaultExpanded)
+    local wrapper = Instance.new("Frame")
+    wrapper.Size = UDim2.new(1, 0, 0, 0)
+    wrapper.AutomaticSize = Enum.AutomaticSize.Y
+    wrapper.BackgroundTransparency = 1
+    wrapper.LayoutOrder = order
+    wrapper.Parent = hideFakeScroll
+
+    local wrapLayout = Instance.new("UIListLayout")
+    wrapLayout.Padding = UDim.new(0, 3)
+    wrapLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    wrapLayout.Parent = wrapper
+
+    local headerBtn = Instance.new("TextButton")
+    headerBtn.Size = UDim2.new(1, 0, 0, 28)
+    headerBtn.LayoutOrder = 1
+    headerBtn.BackgroundColor3 = CARD
+    headerBtn.BorderSizePixel = 0
+    headerBtn.Text = ""
+    headerBtn.AutoButtonColor = false
+    headerBtn.Parent = wrapper
+
+    local hCorner = Instance.new("UICorner")
+    hCorner.CornerRadius = UDim.new(0, 5)
+    hCorner.Parent = headerBtn
+
+    local hStroke = Instance.new("UIStroke")
+    hStroke.Thickness = 1
+    hStroke.Color = accentColor
+    hStroke.Transparency = 0.45
+    hStroke.Parent = headerBtn
+
+    local arrowLbl = Instance.new("TextLabel")
+    arrowLbl.Size = UDim2.new(0, 20, 1, 0)
+    arrowLbl.Position = UDim2.new(0, 6, 0, 0)
+    arrowLbl.BackgroundTransparency = 1
+    arrowLbl.Text = defaultExpanded and "v" or ">"
+    arrowLbl.TextColor3 = accentColor
+    arrowLbl.Font = Enum.Font.GothamBlack
+    arrowLbl.TextSize = 11
+    arrowLbl.Parent = headerBtn
+
+    local badge = Instance.new("Frame")
+    badge.Size = UDim2.new(0, 8, 0, 8)
+    badge.Position = UDim2.new(0, 26, 0.5, -4)
+    badge.BackgroundColor3 = accentColor
+    badge.BorderSizePixel = 0
+    badge.Parent = headerBtn
+
+    local bCorner = Instance.new("UICorner")
+    bCorner.CornerRadius = UDim.new(0, 2)
+    bCorner.Parent = badge
+
+    local titleLbl = Instance.new("TextLabel")
+    titleLbl.Size = UDim2.new(1, -46, 1, 0)
+    titleLbl.Position = UDim2.new(0, 40, 0, 0)
+    titleLbl.BackgroundTransparency = 1
+    titleLbl.Text = categoryTitle
+    titleLbl.TextColor3 = Color3.fromRGB(235, 242, 255)
+    titleLbl.Font = Enum.Font.GothamBold
+    titleLbl.TextSize = 11
+    titleLbl.TextXAlignment = Enum.TextXAlignment.Left
+    titleLbl.Parent = headerBtn
+
+    local childBox = Instance.new("Frame")
+    childBox.Size = UDim2.new(1, 0, 0, 0)
+    childBox.AutomaticSize = Enum.AutomaticSize.Y
+    childBox.BackgroundTransparency = 1
+    childBox.Visible = defaultExpanded
+    childBox.LayoutOrder = 2
+    childBox.Parent = wrapper
+
+    local guideLine = Instance.new("Frame")
+    guideLine.Size = UDim2.new(0, 2, 1, -4)
+    guideLine.Position = UDim2.new(0, 13, 0, 2)
+    guideLine.BackgroundColor3 = accentColor
+    guideLine.BackgroundTransparency = 0.65
+    guideLine.BorderSizePixel = 0
+    guideLine.Parent = childBox
+
+    local innerList = Instance.new("Frame")
+    innerList.Size = UDim2.new(1, -22, 0, 0)
+    innerList.Position = UDim2.new(0, 22, 0, 0)
+    innerList.AutomaticSize = Enum.AutomaticSize.Y
+    innerList.BackgroundTransparency = 1
+    innerList.Parent = childBox
+
+    local innerLayout = Instance.new("UIListLayout")
+    innerLayout.Padding = UDim.new(0, 4)
+    innerLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    innerLayout.Parent = innerList
+
+    local expanded = defaultExpanded
+    headerBtn.MouseButton1Click:Connect(function()
+        playClick()
+        expanded = not expanded
+        childBox.Visible = expanded
+        arrowLbl.Text = expanded and "v" or ">"
+    end)
+
+    return innerList
+end
+
+local function addTreeToggle(parent, order, labelText, configKey, onChange)
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1, 0, 0, 28)
+    row.LayoutOrder = order
+    row.BackgroundColor3 = Color3.fromRGB(16, 20, 38)
+    row.BorderSizePixel = 0
+    row.Parent = parent
+
+    local rc = Instance.new("UICorner")
+    rc.CornerRadius = UDim.new(0, 4)
+    rc.Parent = row
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, -58, 1, 0)
+    lbl.Position = UDim2.new(0, 8, 0, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = labelText
+    lbl.TextColor3 = Color3.fromRGB(215, 225, 245)
+    lbl.Font = Enum.Font.GothamMedium
+    lbl.TextSize = 10
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.TextTruncate = Enum.TextTruncate.AtEnd
+    lbl.Parent = row
+
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(0, 44, 0, 18)
+    btn.Position = UDim2.new(1, -50, 0.5, -9)
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 9
+    btn.Parent = row
+
+    local bc = Instance.new("UICorner")
+    bc.CornerRadius = UDim.new(0, 4)
+    bc.Parent = btn
+
+    local function sync()
+        local active = config[configKey] == true
+        btn.BackgroundColor3 = active and Color3.fromRGB(0, 170, 100) or Color3.fromRGB(150, 40, 50)
+        btn.Text = active and "ON" or "OFF"
+    end
+
+    sync()
+    table.insert(SyncSpoofUi, sync)
+
+    btn.MouseButton1Click:Connect(function()
+        playClick()
+        local nextVal = not (config[configKey] == true)
+        config[configKey] = nextVal
+        sync()
+        saveConfig()
+        if onChange then
+            onChange(nextVal)
+        end
+    end)
+end
+
+local function addTreeInput(parent, order, labelText, placeholder, configKey, onCommit)
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1, 0, 0, 30)
+    row.LayoutOrder = order
+    row.BackgroundColor3 = Color3.fromRGB(16, 20, 38)
+    row.BorderSizePixel = 0
+    row.Parent = parent
+
+    local rc = Instance.new("UICorner")
+    rc.CornerRadius = UDim.new(0, 4)
+    rc.Parent = row
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(0.48, -8, 1, 0)
+    lbl.Position = UDim2.new(0, 8, 0, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = labelText
+    lbl.TextColor3 = Color3.fromRGB(215, 225, 245)
+    lbl.Font = Enum.Font.GothamMedium
+    lbl.TextSize = 10
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.TextTruncate = Enum.TextTruncate.AtEnd
+    lbl.Parent = row
+
+    local box = Instance.new("TextBox")
+    box.Size = UDim2.new(0.50, -6, 0, 20)
+    box.Position = UDim2.new(0.50, 0, 0.5, -10)
+    box.BackgroundColor3 = Color3.fromRGB(10, 14, 28)
+    box.PlaceholderText = placeholder or ""
+    box.PlaceholderColor3 = Color3.fromRGB(100, 115, 145)
+    box.TextColor3 = Color3.fromRGB(240, 246, 255)
+    box.Font = Enum.Font.Gotham
+    box.TextSize = 10
+    box.ClearTextOnFocus = false
+    box.Parent = row
+
+    local bc = Instance.new("UICorner")
+    bc.CornerRadius = UDim.new(0, 4)
+    bc.Parent = box
+
+    local bs = Instance.new("UIStroke")
+    bs.Thickness = 1
+    bs.Color = Color3.fromRGB(40, 55, 85)
+    bs.Parent = box
+
+    local function sync()
+        box.Text = tostring(config[configKey] or "")
+    end
+
+    sync()
+    table.insert(SyncSpoofUi, sync)
+
+    box.FocusLost:Connect(function()
+        if onCommit then
+            onCommit(box.Text)
+        else
+            config[configKey] = box.Text
+        end
+        sync()
+        saveConfig()
+    end)
+end
+
+local function addTreeButton(parent, order, text, btnColor, callback)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, 0, 0, 26)
+    btn.LayoutOrder = order
+    btn.BackgroundColor3 = btnColor
+    btn.Text = text
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 10
+    btn.AutoButtonColor = false
+    btn.Parent = parent
+
+    local bc = Instance.new("UICorner")
+    bc.CornerRadius = UDim.new(0, 4)
+    bc.Parent = btn
+
+    styleButton(btn, btnColor)
+    btn.MouseButton1Click:Connect(callback)
+    return btn
+end
+
+local catIdentity = createDexCategory(1, "User & Title", Color3.fromRGB(0, 200, 255), true)
+addTreeToggle(catIdentity, 1, "Enable Identity & Title Spoofer", "SpoofIdentity", FullRescanAll)
+addTreeInput(catIdentity, 2, "Fake Username (@handle)", "HiddenUser", "FakeUsername", function(v)
+    config.FakeUsername = v ~= "" and v or "HiddenUser"
+    FullRescanAll()
+end)
+addTreeInput(catIdentity, 3, "Fake Display Name", "Streamer", "FakeDisplayName", function(v)
+    config.FakeDisplayName = v ~= "" and v or "Streamer"
+    FullRescanAll()
+end)
+addTreeInput(catIdentity, 4, "Fake Avatar UserId", "1", "FakeUserId", function(v)
+    config.FakeUserId = v ~= "" and v or "1"
+    FullRescanAll()
+end)
+addTreeInput(catIdentity, 5, "Fake Overhead Title", "[Hidden Champion]", "FakeTitle", function(v)
+    config.FakeTitle = v
+    ApplyOverheadSpoof()
+end)
+addTreeToggle(catIdentity, 6, "Spoof Other Players on Boards", "SpoofOthers", FullRescanAll)
+addTreeToggle(catIdentity, 7, "Hide Entire Overhead Tag", "HideOverhead", ApplyOverheadSpoof)
+
+local catGuild = createDexCategory(2, "Guild Spoof", Color3.fromRGB(165, 130, 255), false)
+addTreeToggle(catGuild, 1, "Enable Guild Spoofer", "SpoofGuild", FullRescanAll)
+addTreeInput(catGuild, 2, "Real Guild Tag to Hide", "1001", "RealGuildTag", function(v)
+    config.RealGuildTag = v
+    FullRescanAll()
+end)
+addTreeInput(catGuild, 3, "Fake Guild Tag / Name", "9999", "FakeGuildTag", function(v)
+    config.FakeGuildTag = v ~= "" and v or "9999"
+    FullRescanAll()
+end)
+addTreeInput(catGuild, 4, "Fake Guild Rank", "#9999", "FakeGuildRank", function(v)
+    config.FakeGuildRank = v ~= "" and v or "#9999"
+    ApplyOverheadSpoof()
+end)
+addTreeToggle(catGuild, 5, "Hide Guild Badge Above Head", "HideGuildOverhead", ApplyOverheadSpoof)
+addTreeInput(catGuild, 6, "GIF Frame Animation FPS", "12", "GifFps", function(v)
+    local num = tonumber(v)
+    config.GifFps = (num and num > 0) and num or 12
+end)
+
+local folderBar = Instance.new("Frame")
+folderBar.Size = UDim2.new(1, 0, 0, 28)
+folderBar.LayoutOrder = 7
+folderBar.BackgroundColor3 = Color3.fromRGB(16, 20, 38)
+folderBar.BorderSizePixel = 0
+folderBar.Parent = catGuild
+
+local fbCorner = Instance.new("UICorner")
+fbCorner.CornerRadius = UDim.new(0, 4)
+fbCorner.Parent = folderBar
+
+local folderInfoLbl = Instance.new("TextLabel")
+folderInfoLbl.Size = UDim2.new(1, -86, 1, 0)
+folderInfoLbl.Position = UDim2.new(0, 8, 0, 0)
+folderInfoLbl.BackgroundTransparency = 1
+folderInfoLbl.Text = "Folder: " .. MEDIA_FOLDER
+folderInfoLbl.TextColor3 = Color3.fromRGB(150, 200, 255)
+folderInfoLbl.Font = Enum.Font.GothamSemibold
+folderInfoLbl.TextSize = 10
+folderInfoLbl.TextXAlignment = Enum.TextXAlignment.Left
+folderInfoLbl.TextTruncate = Enum.TextTruncate.AtEnd
+folderInfoLbl.Parent = folderBar
+
+local refreshFolderBtn = Instance.new("TextButton")
+refreshFolderBtn.Size = UDim2.new(0, 74, 0, 18)
+refreshFolderBtn.Position = UDim2.new(1, -80, 0.5, -9)
+refreshFolderBtn.BackgroundColor3 = Color3.fromRGB(45, 135, 95)
+refreshFolderBtn.Text = "Refresh"
+refreshFolderBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+refreshFolderBtn.Font = Enum.Font.GothamBold
+refreshFolderBtn.TextSize = 9
+refreshFolderBtn.Parent = folderBar
+
+local rfCorner = Instance.new("UICorner")
+rfCorner.CornerRadius = UDim.new(0, 4)
+rfCorner.Parent = refreshFolderBtn
+
+local mediaFilesBox = Instance.new("Frame")
+mediaFilesBox.Size = UDim2.new(1, 0, 0, 0)
+mediaFilesBox.AutomaticSize = Enum.AutomaticSize.Y
+mediaFilesBox.BackgroundTransparency = 1
+mediaFilesBox.LayoutOrder = 8
+mediaFilesBox.Parent = catGuild
+
+local mediaFilesLayout = Instance.new("UIListLayout")
+mediaFilesLayout.Padding = UDim.new(0, 3)
+mediaFilesLayout.SortOrder = Enum.SortOrder.LayoutOrder
+mediaFilesLayout.Parent = mediaFilesBox
+
+CustomMediaState.statusLabel = Instance.new("TextLabel")
+CustomMediaState.statusLabel.Size = UDim2.new(1, 0, 0, 0)
+CustomMediaState.statusLabel.AutomaticSize = Enum.AutomaticSize.Y
+CustomMediaState.statusLabel.LayoutOrder = 9
+CustomMediaState.statusLabel.BackgroundTransparency = 1
+CustomMediaState.statusLabel.Text = ""
+CustomMediaState.statusLabel.TextColor3 = Color3.fromRGB(150, 200, 255)
+CustomMediaState.statusLabel.Font = Enum.Font.Gotham
+CustomMediaState.statusLabel.TextSize = 10
+CustomMediaState.statusLabel.TextXAlignment = Enum.TextXAlignment.Left
+CustomMediaState.statusLabel.TextYAlignment = Enum.TextYAlignment.Top
+CustomMediaState.statusLabel.TextWrapped = true
+CustomMediaState.statusLabel.Parent = catGuild
+
+CustomMediaState.updateStatus = function()
+    if CustomMediaState.statusLabel then
+        CustomMediaState.statusLabel.Text = (CustomMediaState.Status and CustomMediaState.Status ~= "") and ("Status: " .. CustomMediaState.Status) or ""
+    end
+end
+
+local function rebuildMediaFileList()
+    for _, child in ipairs(mediaFilesBox:GetChildren()) do
+        if child:IsA("TextButton") then
+            child:Destroy()
+        end
+    end
+
+    local items = {
+        {Path = "", Name = "None (Original Guild Icon)", Kind = "none"}
+    }
+    for _, entry in ipairs(GetFolderMediaEntries()) do
+        table.insert(items, entry)
+    end
+
+    for idx, item in ipairs(items) do
+        local isSelected = (config.SelectedMediaPath == item.Path)
+        local itemBtn = Instance.new("TextButton")
+        itemBtn.Size = UDim2.new(1, 0, 0, 24)
+        itemBtn.LayoutOrder = idx
+        itemBtn.BackgroundColor3 = isSelected and Color3.fromRGB(45, 90, 195) or Color3.fromRGB(12, 16, 30)
+        itemBtn.Text = (isSelected and "  [ACTIVE] " or "  ") .. item.Name
+        itemBtn.TextColor3 = isSelected and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(190, 200, 225)
+        itemBtn.Font = isSelected and Enum.Font.GothamBold or Enum.Font.Gotham
+        itemBtn.TextSize = 10
+        itemBtn.TextXAlignment = Enum.TextXAlignment.Left
+        itemBtn.TextTruncate = Enum.TextTruncate.AtEnd
+        itemBtn.Parent = mediaFilesBox
+
+        local ic = Instance.new("UICorner")
+        ic.CornerRadius = UDim.new(0, 4)
+        ic.Parent = itemBtn
+
+        itemBtn.MouseButton1Click:Connect(function()
+            playClick()
+            config.SelectedMediaPath = item.Path
+            config.SelectedMediaLabel = item.Name
+            saveConfig()
+            LoadCustomMediaFromPath(item.Path)
+            CustomMediaState.updateStatus()
+            FullRescanAll()
+            rebuildMediaFileList()
+        end)
+    end
+end
+
+refreshFolderBtn.MouseButton1Click:Connect(function()
+    playClick()
+    rebuildMediaFileList()
+    if config.SelectedMediaPath ~= "" then
+        LoadCustomMediaFromPath(config.SelectedMediaPath)
+        CustomMediaState.updateStatus()
+        FullRescanAll()
+    end
+end)
+
+rebuildMediaFileList()
+CustomMediaState.updateStatus()
+table.insert(SyncSpoofUi, rebuildMediaFileList)
+table.insert(SyncSpoofUi, CustomMediaState.updateStatus)
+
+do
+    local cat = createDexCategory(6, "UI Background", Color3.fromRGB(120, 200, 255), false)
+    addTreeInput(cat, 1, "Image Opacity (0-100)", "75", "UIBgOpacity", function(v)
+        local num = tonumber(v)
+        config.UIBgOpacity = (num and num >= 0 and num <= 100) and num or 75
+        UIBg.applyBackground()
+    end)
+
+    local bar = Instance.new("Frame")
+    bar.Size = UDim2.new(1, 0, 0, 28)
+    bar.LayoutOrder = 2
+    bar.BackgroundColor3 = Color3.fromRGB(16, 20, 38)
+    bar.BorderSizePixel = 0
+    bar.Parent = cat
+    do
+        local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 4); c.Parent = bar
+    end
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, -86, 1, 0)
+    lbl.Position = UDim2.new(0, 8, 0, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = "Folder: " .. MEDIA_FOLDER
+    lbl.TextColor3 = Color3.fromRGB(150, 200, 255)
+    lbl.Font = Enum.Font.GothamSemibold
+    lbl.TextSize = 10
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.TextTruncate = Enum.TextTruncate.AtEnd
+    lbl.Parent = bar
+
+    local refreshBtn = Instance.new("TextButton")
+    refreshBtn.Size = UDim2.new(0, 74, 0, 18)
+    refreshBtn.Position = UDim2.new(1, -80, 0.5, -9)
+    refreshBtn.BackgroundColor3 = Color3.fromRGB(45, 135, 95)
+    refreshBtn.Text = "Refresh"
+    refreshBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    refreshBtn.Font = Enum.Font.GothamBold
+    refreshBtn.TextSize = 9
+    refreshBtn.Parent = bar
+    do
+        local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 4); c.Parent = refreshBtn
+    end
+
+    UIBg.filesBox = Instance.new("Frame")
+    UIBg.filesBox.Size = UDim2.new(1, 0, 0, 0)
+    UIBg.filesBox.AutomaticSize = Enum.AutomaticSize.Y
+    UIBg.filesBox.BackgroundTransparency = 1
+    UIBg.filesBox.LayoutOrder = 3
+    UIBg.filesBox.Parent = cat
+    do
+        local l = Instance.new("UIListLayout")
+        l.Padding = UDim.new(0, 3)
+        l.SortOrder = Enum.SortOrder.LayoutOrder
+        l.Parent = UIBg.filesBox
+    end
+
+    UIBg.statusLabel = Instance.new("TextLabel")
+    UIBg.statusLabel.Size = UDim2.new(1, 0, 0, 0)
+    UIBg.statusLabel.AutomaticSize = Enum.AutomaticSize.Y
+    UIBg.statusLabel.LayoutOrder = 4
+    UIBg.statusLabel.BackgroundTransparency = 1
+    UIBg.statusLabel.Text = ""
+    UIBg.statusLabel.TextColor3 = Color3.fromRGB(150, 200, 255)
+    UIBg.statusLabel.Font = Enum.Font.Gotham
+    UIBg.statusLabel.TextSize = 10
+    UIBg.statusLabel.TextXAlignment = Enum.TextXAlignment.Left
+    UIBg.statusLabel.TextYAlignment = Enum.TextYAlignment.Top
+    UIBg.statusLabel.TextWrapped = true
+    UIBg.statusLabel.Parent = cat
+
+    UIBg.updateStatus = function()
+        if UIBg.statusLabel then
+            local s = UIBg.state.Status or ""
+            if UIBg.state.Mode ~= "none" and config.Mica ~= true then
+                s = s .. " (Enable Mica in Settings to show it on the UI.)"
+            end
+            UIBg.statusLabel.Text = (s ~= "") and ("Status: " .. s) or ""
+        end
+    end
+
+    UIBg.rebuild = function()
+        for _, child in ipairs(UIBg.filesBox:GetChildren()) do
+            if child:IsA("TextButton") then
+                child:Destroy()
+            end
+        end
+
+        local items = {
+            {Path = "", Name = "None (No UI Background)", Kind = "none"}
+        }
+        for _, entry in ipairs(GetFolderMediaEntries()) do
+            table.insert(items, entry)
+        end
+
+        for idx, item in ipairs(items) do
+            local isSelected = (config.UIBgPath == item.Path)
+            local itemBtn = Instance.new("TextButton")
+            itemBtn.Size = UDim2.new(1, 0, 0, 24)
+            itemBtn.LayoutOrder = idx
+            itemBtn.BackgroundColor3 = isSelected and Color3.fromRGB(45, 90, 195) or Color3.fromRGB(12, 16, 30)
+            itemBtn.Text = (isSelected and "  [ACTIVE] " or "  ") .. item.Name
+            itemBtn.TextColor3 = isSelected and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(190, 200, 225)
+            itemBtn.Font = isSelected and Enum.Font.GothamBold or Enum.Font.Gotham
+            itemBtn.TextSize = 10
+            itemBtn.TextXAlignment = Enum.TextXAlignment.Left
+            itemBtn.TextTruncate = Enum.TextTruncate.AtEnd
+            itemBtn.Parent = UIBg.filesBox
+
+            do
+                local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 4); c.Parent = itemBtn
+            end
+
+            itemBtn.MouseButton1Click:Connect(function()
+                playClick()
+                config.UIBgPath = item.Path
+                config.UIBgLabel = item.Name
+                saveConfig()
+                UIBg.load(item.Path)
+                UIBg.updateStatus()
+                UIBg.applyBackground()
+                if config.Mica then UIBg.applyMica() end
+                UIBg.rebuild()
+            end)
+        end
+    end
+
+    refreshBtn.MouseButton1Click:Connect(function()
+        playClick()
+        UIBg.rebuild()
+        if config.UIBgPath ~= "" then
+            UIBg.load(config.UIBgPath)
+            UIBg.updateStatus()
+            UIBg.applyBackground()
+        end
+    end)
+
+    pcall(UIBg.rebuild)
+    pcall(UIBg.updateStatus)
+    table.insert(SyncSpoofUi, UIBg.rebuild)
+    table.insert(SyncSpoofUi, UIBg.updateStatus)
+end
+
+local catStats = createDexCategory(3, "Stats & Currency", Color3.fromRGB(100, 255, 180), false)
+addTreeToggle(catStats, 1, "Enable Level & Currency Spoofer", "SpoofStats", FullRescanAll)
+addTreeInput(catStats, 2, "Fake Player Level", "1", "FakeLevel", function(v)
+    config.FakeLevel = v
+    FullRescanAll()
+end)
+addTreeInput(catStats, 3, "Fake Summer Pearls", "1,500", "FakePearls", function(v)
+    config.FakePearls = v
+    ApplySpecificPlayerGuiSpoof()
+end)
+addTreeInput(catStats, 4, "Fake Gems", "12,500", "FakeGems", function(v)
+    config.FakeGems = v
+    ApplySpecificPlayerGuiSpoof()
+end)
+addTreeInput(catStats, 5, "Fake Gold / Yen", "250,000", "FakeGold", function(v)
+    config.FakeGold = v
+    ApplySpecificPlayerGuiSpoof()
+end)
+
+local catBoards = createDexCategory(4, "Leaderboards & Scores", Color3.fromRGB(255, 195, 50), false)
+addTreeToggle(catBoards, 1, "Spoof Leaderboard Rank & DMG", "SpoofTournament", ApplyTournamentBoardsSpoof)
+addTreeInput(catBoards, 2, "Fake Your Rank Place", "#1", "FakePlace", function(v)
+    config.FakePlace = v
+    ApplyTournamentBoardsSpoof()
+end)
+addTreeInput(catBoards, 3, "Fake Your DMG / Score", "192.1204B", "FakeScore", function(v)
+    config.FakeScore = v
+    ApplyTournamentBoardsSpoof()
+    ApplyInGameAndResultsSpoof()
+end)
+addTreeToggle(catBoards, 4, "Spoof In-Game & Result Scores", "SpoofInGameScores", ApplyInGameAndResultsSpoof)
+addTreeInput(catBoards, 5, "Fake High Score (Empty = Same)", "192.1204B", "FakeHighScore", function(v)
+    config.FakeHighScore = v
+    ApplyInGameAndResultsSpoof()
+end)
+addTreeInput(catBoards, 6, "Fake Run Score (Empty = Real)", "Keep real run DMG", "FakeCurrentScore", function(v)
+    config.FakeCurrentScore = v
+    ApplyInGameAndResultsSpoof()
+end)
+
+local catHud = createDexCategory(5, "UI & HUD Controls", Color3.fromRGB(255, 110, 130), false)
+addTreeToggle(catHud, 1, "Hide Party Panel", "HidePartyPanel", ApplyPartyVisibility)
+addTreeToggle(catHud, 2, "Hide Roblox Chat Box", "HideRobloxChat", function(v)
+    pcall(function()
+        StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.Chat, not v)
+    end)
+end)
+addTreeToggle(catHud, 3, "Click-to-Hide Any UI Panel Mode", "ClickToHideMode", nil)
+addTreeButton(catHud, 4, "Restore Click-Hidden UI Panels", Color3.fromRGB(52, 68, 105), function()
+    for frame, _ in pairs(HiddenElements) do
+        if frame and frame.Parent then
+            frame.Visible = true
+        end
+    end
+    HiddenElements = {}
+end)
+addTreeButton(catHud, 5, "Force Refresh All Spoof Targets", Color3.fromRGB(45, 105, 205), function()
+    FullRescanAll()
+end)
+addTreeButton(catHud, 6, "Restore All Originals", Color3.fromRGB(165, 55, 65), function()
+    RestoreAllSpoofOriginals()
+end)
+
+local settingsPanel = Instance.new("Frame")
+settingsPanel.Size = UDim2.new(1, -16, 0, 310)
+settingsPanel.Position = UDim2.new(0, 8, 0, 38)
+settingsPanel.BackgroundColor3 = CARD
+settingsPanel.BorderSizePixel = 0
+settingsPanel.Visible = false
+settingsPanel.Parent = mainFrame
+local spc = Instance.new("UICorner")
+spc.CornerRadius = UDim.new(0, 6)
+spc.Parent = settingsPanel
+local sps = Instance.new("UIStroke")
+sps.Thickness = 1
+sps.Color = NEON
+sps.Transparency = 0.45
+sps.Parent = settingsPanel
+
+local cfgLabel = Instance.new("TextLabel")
+cfgLabel.Size = UDim2.new(1, -16, 0, 18)
+cfgLabel.Position = UDim2.new(0, 10, 0, 12)
+cfgLabel.BackgroundTransparency = 1
+cfgLabel.Text = "Shared Config: " .. CONFIG_FILE
+cfgLabel.TextColor3 = Color3.fromRGB(210, 220, 240)
+cfgLabel.TextSize = 11
+cfgLabel.Font = Enum.Font.Gotham
+cfgLabel.TextXAlignment = Enum.TextXAlignment.Left
+cfgLabel.Parent = settingsPanel
+
+local mediaPathLabel = Instance.new("TextLabel")
+mediaPathLabel.Size = UDim2.new(1, -16, 0, 18)
+mediaPathLabel.Position = UDim2.new(0, 10, 0, 32)
+mediaPathLabel.BackgroundTransparency = 1
+mediaPathLabel.Text = "Media Folder: " .. MEDIA_FOLDER
+mediaPathLabel.TextColor3 = Color3.fromRGB(150, 200, 255)
+mediaPathLabel.TextSize = 11
+mediaPathLabel.Font = Enum.Font.Gotham
+mediaPathLabel.TextXAlignment = Enum.TextXAlignment.Left
+mediaPathLabel.Parent = settingsPanel
+
+local keyLabel = Instance.new("TextLabel")
+keyLabel.Size = UDim2.new(1, -120, 0, 20)
+keyLabel.Position = UDim2.new(0, 10, 0, 60)
+keyLabel.BackgroundTransparency = 1
+keyLabel.Text = "Open/Close Key: M"
+keyLabel.TextColor3 = Color3.fromRGB(210, 220, 240)
+keyLabel.TextSize = 12
+keyLabel.Font = Enum.Font.Gotham
+keyLabel.TextXAlignment = Enum.TextXAlignment.Left
+keyLabel.Parent = settingsPanel
+
+local changeKeyBtn = Instance.new("TextButton")
+changeKeyBtn.Size = UDim2.new(0, 100, 0, 24)
+changeKeyBtn.Position = UDim2.new(1, -110, 0, 58)
+changeKeyBtn.BackgroundColor3 = Color3.fromRGB(55, 95, 210)
+changeKeyBtn.Text = "CHANGE KEY"
+changeKeyBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+changeKeyBtn.TextSize = 10
+changeKeyBtn.Font = Enum.Font.GothamBold
+changeKeyBtn.AutoButtonColor = false
+changeKeyBtn.Parent = settingsPanel
+local ckc = Instance.new("UICorner")
+ckc.CornerRadius = UDim.new(0, 4)
+ckc.Parent = changeKeyBtn
+styleButton(changeKeyBtn, Color3.fromRGB(55, 95, 210))
+
+local hideStarRow = Instance.new("Frame")
+hideStarRow.Size = UDim2.new(1, -20, 0, 28)
+hideStarRow.Position = UDim2.new(0, 10, 0, 92)
+hideStarRow.BackgroundColor3 = Color3.fromRGB(14, 18, 34)
+hideStarRow.BorderSizePixel = 0
+hideStarRow.Parent = settingsPanel
+local hsrc = Instance.new("UICorner")
+hsrc.CornerRadius = UDim.new(0, 4)
+hsrc.Parent = hideStarRow
+
+local hideStarLabel = Instance.new("TextLabel")
+hideStarLabel.Size = UDim2.new(1, -68, 1, 0)
+hideStarLabel.Position = UDim2.new(0, 10, 0, 0)
+hideStarLabel.BackgroundTransparency = 1
+hideStarLabel.Text = "Hide Floating Star Button (Hotkey Still Works)"
+hideStarLabel.TextColor3 = Color3.fromRGB(210, 220, 240)
+hideStarLabel.TextSize = 11
+hideStarLabel.Font = Enum.Font.GothamMedium
+hideStarLabel.TextXAlignment = Enum.TextXAlignment.Left
+hideStarLabel.TextTruncate = Enum.TextTruncate.AtEnd
+hideStarLabel.Parent = hideStarRow
+
+local hideStarToggleBtn = Instance.new("TextButton")
+hideStarToggleBtn.Size = UDim2.new(0, 48, 0, 20)
+hideStarToggleBtn.Position = UDim2.new(1, -54, 0.5, -10)
+hideStarToggleBtn.BackgroundColor3 = config.HideStarIcon and Color3.fromRGB(0, 170, 100) or Color3.fromRGB(150, 40, 50)
+hideStarToggleBtn.Text = config.HideStarIcon and "ON" or "OFF"
+hideStarToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+hideStarToggleBtn.TextSize = 9
+hideStarToggleBtn.Font = Enum.Font.GothamBold
+hideStarToggleBtn.AutoButtonColor = false
+hideStarToggleBtn.Parent = hideStarRow
+local hstbc = Instance.new("UICorner")
+hstbc.CornerRadius = UDim.new(0, 4)
+hstbc.Parent = hideStarToggleBtn
+
+do
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1, -20, 0, 28)
+    row.Position = UDim2.new(0, 10, 0, 122)
+    row.BackgroundColor3 = Color3.fromRGB(14, 18, 34)
+    row.BorderSizePixel = 0
+    row.Parent = settingsPanel
+    do
+        local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 4); c.Parent = row
+    end
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, -68, 1, 0)
+    lbl.Position = UDim2.new(0, 10, 0, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = "Mica (Transparent UI)"
+    lbl.TextColor3 = Color3.fromRGB(210, 220, 240)
+    lbl.TextSize = 11
+    lbl.Font = Enum.Font.GothamMedium
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.TextTruncate = Enum.TextTruncate.AtEnd
+    lbl.Parent = row
+
+    UIBg.micaBtn = Instance.new("TextButton")
+    UIBg.micaBtn.Size = UDim2.new(0, 48, 0, 20)
+    UIBg.micaBtn.Position = UDim2.new(1, -54, 0.5, -10)
+    UIBg.micaBtn.BackgroundColor3 = config.Mica and Color3.fromRGB(0, 170, 100) or Color3.fromRGB(150, 40, 50)
+    UIBg.micaBtn.Text = config.Mica and "ON" or "OFF"
+    UIBg.micaBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    UIBg.micaBtn.TextSize = 9
+    UIBg.micaBtn.Font = Enum.Font.GothamBold
+    UIBg.micaBtn.AutoButtonColor = false
+    UIBg.micaBtn.Parent = row
+    do
+        local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 4); c.Parent = UIBg.micaBtn
+    end
+
+    UIBg.syncMica = function()
+        if UIBg.micaBtn then
+            UIBg.micaBtn.Text = config.Mica and "ON" or "OFF"
+            UIBg.micaBtn.BackgroundColor3 = config.Mica and Color3.fromRGB(0, 170, 100) or Color3.fromRGB(150, 40, 50)
+        end
+    end
+
+    UIBg.micaBtn.MouseButton1Click:Connect(function()
+        playClick()
+        config.Mica = not (config.Mica == true)
+        saveConfig()
+        UIBg.syncMica()
+        UIBg.applyMica()
+    end)
+end
+
+local resetConfigBtn = Instance.new("TextButton")
+resetConfigBtn.Size = UDim2.new(1, -20, 0, 26)
+resetConfigBtn.Position = UDim2.new(0, 10, 0, 154)
+resetConfigBtn.BackgroundColor3 = Color3.fromRGB(165, 95, 40)
+resetConfigBtn.Text = "RESET ALL SETTINGS TO DEFAULT"
+resetConfigBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+resetConfigBtn.TextSize = 10
+resetConfigBtn.Font = Enum.Font.GothamBold
+resetConfigBtn.AutoButtonColor = false
+resetConfigBtn.Parent = settingsPanel
+local rcc = Instance.new("UICorner")
+rcc.CornerRadius = UDim.new(0, 4)
+rcc.Parent = resetConfigBtn
+styleButton(resetConfigBtn, Color3.fromRGB(165, 95, 40))
+
+local hintLabel = Instance.new("TextLabel")
+hintLabel.Size = UDim2.new(1, -20, 0, 62)
+hintLabel.Position = UDim2.new(0, 10, 0, 188)
+hintLabel.BackgroundTransparency = 1
+hintLabel.Text = "Drag the title bar to move. Click CHANGE KEY then press any key to set the open/close hotkey. Put custom guild images (.png/.jpg) or GIF frame folders (a folder of .png frames) into workspace/" .. MEDIA_FOLDER .. ". Animated .gif and .webm/.mp4 video files cannot be animated directly by Roblox."
+hintLabel.TextColor3 = Color3.fromRGB(140, 160, 190)
+hintLabel.TextSize = 10
+hintLabel.Font = Enum.Font.Gotham
+hintLabel.TextXAlignment = Enum.TextXAlignment.Left
+hintLabel.TextYAlignment = Enum.TextYAlignment.Top
+hintLabel.TextWrapped = true
+hintLabel.Parent = settingsPanel
+
+local toggleKey = Enum.KeyCode[config.ToggleKey or "M"] or Enum.KeyCode.M
+local awaitingKey = false
+
+local function refreshKeyLabel()
+    keyLabel.Text = "Open/Close Key: " .. toggleKey.Name
+end
+refreshKeyLabel()
+
+changeKeyBtn.MouseButton1Click:Connect(function()
+    awaitingKey = true
+    keyLabel.Text = "Open/Close Key: press any key..."
+end)
+
+local function showPanel(which)
+    scrollList.Visible = (which == "buff")
+    hideFakeScroll.Visible = (which == "hidefake")
+    settingsPanel.Visible = (which == "settings")
+    buffBtn.BackgroundColor3 = (which == "buff") and Color3.fromRGB(0, 200, 150) or Color3.fromRGB(0, 165, 120)
+    hideFakeBtn.BackgroundColor3 = (which == "hidefake") and Color3.fromRGB(65, 135, 245) or Color3.fromRGB(45, 110, 210)
+    settingsBtn.BackgroundColor3 = (which == "settings") and Color3.fromRGB(210, 150, 50) or Color3.fromRGB(160, 110, 30)
+end
+
+buffBtn.MouseButton1Click:Connect(function() showPanel("buff") end)
+hideFakeBtn.MouseButton1Click:Connect(function() showPanel("hidefake") end)
+settingsBtn.MouseButton1Click:Connect(function() showPanel("settings") end)
+
+local byMonLabel = Instance.new("TextLabel")
+byMonLabel.Size = UDim2.new(0, 100, 0, 18)
+byMonLabel.Position = UDim2.new(0, 12, 1, -22)
+byMonLabel.BackgroundTransparency = 1
+byMonLabel.Text = "By Mon"
+byMonLabel.TextColor3 = Color3.fromRGB(100, 120, 160)
+byMonLabel.TextSize = 10
+byMonLabel.Font = Enum.Font.GothamBold
+byMonLabel.TextXAlignment = Enum.TextXAlignment.Left
+byMonLabel.Parent = mainFrame
+
+-- Removed problematic ZIndex override to restore button clicks
+
+pcall(UIBg.applyMica)
+pcall(UIBg.applyBackground)
+
+local openCloseBtn = Instance.new("TextButton")
+openCloseBtn.Size = UDim2.new(0, 46, 0, 46)
+openCloseBtn.Position = UDim2.new(0.02, 0, 0.45, 0)
+openCloseBtn.BackgroundColor3 = BG
+openCloseBtn.Text = string.char(226, 152, 133)
+openCloseBtn.TextColor3 = NEON
+openCloseBtn.TextSize = 20
+openCloseBtn.Font = Enum.Font.GothamBold
+openCloseBtn.AutoButtonColor = false
+openCloseBtn.Active = true
+openCloseBtn.Draggable = true
+openCloseBtn.Visible = not (config.HideStarIcon == true)
+openCloseBtn.Parent = screenGui
+local occ = Instance.new("UICorner")
+occ.CornerRadius = UDim.new(1, 0)
+occ.Parent = openCloseBtn
+local ocs = Instance.new("UIStroke")
+ocs.Thickness = 1.5
+ocs.Color = NEON
+ocs.Parent = openCloseBtn
+styleButton(openCloseBtn, BG)
+
+local function syncStarVisibility()
+    local hideStar = config.HideStarIcon == true
+    openCloseBtn.Visible = not hideStar
+    hideStarToggleBtn.Text = hideStar and "ON" or "OFF"
+    hideStarToggleBtn.BackgroundColor3 = hideStar and Color3.fromRGB(0, 170, 100) or Color3.fromRGB(150, 40, 50)
+end
+
+syncStarVisibility()
+
+hideStarToggleBtn.MouseButton1Click:Connect(function()
+    playClick()
+    config.HideStarIcon = not (config.HideStarIcon == true)
+    saveConfig()
+    syncStarVisibility()
+end)
+
+local function toggleUIVisibility()
+    mainFrame.Visible = not mainFrame.Visible
+    config.MenuVisible = mainFrame.Visible
+    saveConfig()
+end
+
+openCloseBtn.MouseButton1Click:Connect(toggleUIVisibility)
+
+UserInputService.InputBegan:Connect(function(input, gp)
+    if awaitingKey then
+        if input.KeyCode ~= Enum.KeyCode.Unknown then
+            toggleKey = input.KeyCode
+            config.ToggleKey = input.KeyCode.Name
+            saveConfig()
+            awaitingKey = false
+            refreshKeyLabel()
+        end
+        return
+    end
+    if not gp and input.KeyCode == toggleKey then
+        toggleUIVisibility()
+        return
+    end
+    if input.UserInputType == Enum.UserInputType.MouseButton1 and config.ClickToHideMode then
+        local pGui = LocalPlayer:FindFirstChild("PlayerGui")
+        if not pGui then
+            return
+        end
+        local pos = UserInputService:GetMouseLocation()
+        local hits = pGui:GetGuiObjectsAtPosition(pos.X, pos.Y - 36)
+        if #hits == 0 then
+            hits = pGui:GetGuiObjectsAtPosition(pos.X, pos.Y)
+        end
+        for _, obj in ipairs(hits) do
+            if not obj:IsDescendantOf(screenGui) and obj.Visible and (obj:IsA("Frame") or obj:IsA("ScrollingFrame") or obj:IsA("ImageLabel")) then
+                HiddenElements[obj] = true
+                obj.Visible = false
+                break
+            end
+        end
+    end
+end)
+
+showPanel("buff")
+
+local function updateRukiaDisplay(units)
+    for i = 1, 3 do
+        local row = rukiaUI.unitRows[i]
+        local u = units[i]
+        if u and u.Parent and u:IsDescendantOf(workspace) then
+            local energy = getRukiaEnergy(u)
+            row.circle.BackgroundColor3 = Color3.fromRGB(0, 180, 255)
+            row.barFill.BackgroundColor3 = Color3.fromRGB(0, 180, 255)
+            row.barFill.Size = UDim2.new(math.clamp(energy / 100, 0, 1), 0, 1, 0)
+            row.percentText.Text = string.format("%d%%", energy)
+            row.percentText.TextColor3 = Color3.fromRGB(240, 240, 255)
+        else
+            row.circle.BackgroundColor3 = Color3.fromRGB(45, 55, 80)
+            row.barFill.Size = UDim2.new(0, 0, 1, 0)
+            row.percentText.Text = "EMPTY"
+            row.percentText.TextColor3 = Color3.fromRGB(120, 130, 150)
+        end
+    end
+end
+
+local function updateHakariDisplay(units)
+    for i = 1, 3 do
+        local row = hakariUI.unitRows[i]
+        local u = units[i]
+        if u and u.Parent and u:IsDescendantOf(workspace) then
+            local energy = getHakariEnergy(u)
+            row.circle.BackgroundColor3 = Color3.fromRGB(0, 255, 170)
+            row.barFill.BackgroundColor3 = Color3.fromRGB(0, 255, 170)
+            row.barFill.Size = UDim2.new(math.clamp(energy / 100, 0, 1), 0, 1, 0)
+            row.percentText.Text = string.format("%d%%", energy)
+            row.percentText.TextColor3 = Color3.fromRGB(240, 240, 255)
+        else
+            row.circle.BackgroundColor3 = Color3.fromRGB(45, 55, 80)
+            row.barFill.Size = UDim2.new(0, 0, 1, 0)
+            row.percentText.Text = "EMPTY"
+            row.percentText.TextColor3 = Color3.fromRGB(120, 130, 150)
+        end
+    end
+end
+
+local function updateErwinDisplay(units)
+    for i = 1, 4 do
+        local row = erwinUI.unitRows[i]
+        local u = units[i]
+        if u and u.Parent and u:IsDescendantOf(workspace) then
+            row.circle.BackgroundColor3 = Color3.fromRGB(255, 185, 30)
+            if i == currentActiveErwin and erwinStepRemain > 0 then
+                local pct = math.clamp(erwinStepRemain / ERWIN_INTERVAL, 0, 1)
+                row.barFill.Size = UDim2.new(pct, 0, 1, 0)
+                row.barFill.BackgroundColor3 = Color3.fromRGB(255, 220, 50)
+                row.percentText.Text = string.format("%.1fs", erwinStepRemain)
+                row.percentText.TextColor3 = Color3.fromRGB(255, 255, 180)
+            else
+                row.barFill.Size = UDim2.new(0, 0, 1, 0)
+                row.percentText.Text = "READY"
+                row.percentText.TextColor3 = Color3.fromRGB(180, 160, 130)
+            end
+        else
+            row.circle.BackgroundColor3 = Color3.fromRGB(45, 55, 80)
+            row.barFill.Size = UDim2.new(0, 0, 1, 0)
+            row.percentText.Text = "EMPTY"
+            row.percentText.TextColor3 = Color3.fromRGB(110, 100, 90)
+        end
+    end
+end
+
+local function updateWendyDisplay(units)
+    for i = 1, 4 do
+        local row = wendyUI.unitRows[i]
+        local u = units[i]
+        if u and u.Parent and u:IsDescendantOf(workspace) then
+            row.circle.BackgroundColor3 = Color3.fromRGB(80, 220, 255)
+            if i == currentActiveWendy and wendyStepRemain > 0 then
+                local pct = math.clamp(wendyStepRemain / WENDY_INTERVAL, 0, 1)
+                row.barFill.Size = UDim2.new(pct, 0, 1, 0)
+                row.barFill.BackgroundColor3 = Color3.fromRGB(120, 240, 255)
+                row.percentText.Text = string.format("%.1fs", wendyStepRemain)
+                row.percentText.TextColor3 = Color3.fromRGB(220, 255, 255)
+            else
+                row.barFill.Size = UDim2.new(0, 0, 1, 0)
+                row.percentText.Text = "READY"
+                row.percentText.TextColor3 = Color3.fromRGB(150, 190, 210)
+            end
+        else
+            row.circle.BackgroundColor3 = Color3.fromRGB(45, 55, 80)
+            row.barFill.Size = UDim2.new(0, 0, 1, 0)
+            row.percentText.Text = "EMPTY"
+            row.percentText.TextColor3 = Color3.fromRGB(110, 100, 90)
+        end
+    end
+end
+
+local function updateLeafaDisplay(units)
+    for i = 1, 4 do
+        local row = leafaUI.unitRows[i]
+        local u = units[i]
+        if u and u.Parent and u:IsDescendantOf(workspace) then
+            row.circle.BackgroundColor3 = Color3.fromRGB(130, 255, 120)
+            if i == currentActiveLeafa and leafaStepRemain > 0 then
+                local pct = math.clamp(leafaStepRemain / LEAFA_INTERVAL, 0, 1)
+                row.barFill.Size = UDim2.new(pct, 0, 1, 0)
+                row.barFill.BackgroundColor3 = Color3.fromRGB(160, 255, 140)
+                row.percentText.Text = string.format("%.1fs", leafaStepRemain)
+                row.percentText.TextColor3 = Color3.fromRGB(220, 255, 210)
+            else
+                row.barFill.Size = UDim2.new(0, 0, 1, 0)
+                row.percentText.Text = "READY"
+                row.percentText.TextColor3 = Color3.fromRGB(150, 210, 160)
+            end
+        else
+            row.circle.BackgroundColor3 = Color3.fromRGB(45, 55, 80)
+            row.barFill.Size = UDim2.new(0, 0, 1, 0)
+            row.percentText.Text = "EMPTY"
+            row.percentText.TextColor3 = Color3.fromRGB(110, 100, 90)
+        end
+    end
+end
+
+task.spawn(function()
+    while true do
+        local units = getMyUnitsByNames(RUKIA_NAMES, RUKIA_REQUIRED)
+        updateRukiaDisplay(units)
+
+        if isRukiaRunning then
+            if #units < RUKIA_REQUIRED then
+                rukiaUI.countdownLabel.Text = "Cooldown: Paused"
+                rukiaUI.stateLabel.Text = string.format("Placed: %d/%d Units", #units, RUKIA_REQUIRED)
+                currentActiveRukia = nil
+                rukiaActiveUntil = 0
+                task.wait(0.5)
+            else
+                local now = os.clock()
+                if currentActiveRukia and currentActiveRukia.Parent and currentActiveRukia:IsDescendantOf(workspace) and rukiaActiveUntil > now then
+                    local remain = rukiaActiveUntil - now
+                    rukiaUI.countdownLabel.Text = string.format("Freeze: %.1fs left", remain)
+                    rukiaUI.stateLabel.Text = "Active Freeze Buffing"
+                    task.wait(0.1)
+                else
+                    currentActiveRukia = nil
+                    local unitData = {}
+                    for _, u in ipairs(units) do
+                        table.insert(unitData, {
+                            unit = u,
+                            energy = getRukiaEnergy(u)
+                        })
+                    end
+
+                    table.sort(unitData, function(a, b)
+                        return a.energy > b.energy
+                    end)
+
+                    local bestUnit = unitData[1].unit
+                    local bestEnergy = unitData[1].energy
+                    local secondEnergy = unitData[2] and unitData[2].energy or 0
+
+                    if bestEnergy < 100 then
+                        rukiaUI.countdownLabel.Text = "Cooldown: Ready"
+                        rukiaUI.stateLabel.Text = string.format("Charging: Max %d%%", bestEnergy)
+                        task.wait(0.1)
+                    elseif secondEnergy < 50 then
+                        rukiaUI.countdownLabel.Text = "Cooldown: Ready"
+                        rukiaUI.stateLabel.Text = string.format("Sync: 2nd at %d%% (Need 50%%)", secondEnergy)
+                        task.wait(0.1)
+                    else
+                        local castSucceeded = castSkill(bestUnit)
+
+                        if castSucceeded then
+                            currentActiveRukia = bestUnit
+                            rukiaActiveUntil = os.clock() + RUKIA_DURATION
+                            rukiaUI.countdownLabel.Text = string.format("Freeze: %.1fs left", RUKIA_DURATION)
+                            rukiaUI.stateLabel.Text = "Freeze command sent"
+                            task.wait(0.3)
+                        else
+                            currentActiveRukia = nil
+                            rukiaActiveUntil = 0
+                            rukiaUI.countdownLabel.Text = "Cooldown: Ready"
+                            rukiaUI.stateLabel.Text = "Skill request failed; retrying"
+                            task.wait(0.5)
+                        end
+                    end
+                end
+            end
+        else
+            rukiaUI.countdownLabel.Text = "Cooldown: Stopped"
+            rukiaUI.stateLabel.Text = "Status: OFF"
+            task.wait(0.3)
+        end
+    end
+end)
+
+task.spawn(function()
+    while true do
+        local units = getMyUnitsByNames(HAKARI_NAMES, HAKARI_REQUIRED)
+        updateHakariDisplay(units)
+
+        if isHakariRunning then
+            if #units < HAKARI_REQUIRED then
+                hakariUI.countdownLabel.Text = "Cooldown: Paused"
+                hakariUI.stateLabel.Text = string.format("Placed: %d/%d Units", #units, HAKARI_REQUIRED)
+                currentActiveHakari = nil
+                hakariActiveUntil = 0
+                task.wait(0.5)
+            else
+                local now = os.clock()
+                if hakariActiveUntil > now then
+                    local remain = hakariActiveUntil - now
+                    hakariUI.countdownLabel.Text = string.format("Jackpot: %.1fs left", remain)
+                    hakariUI.stateLabel.Text = "Active Jackpot Buffing"
+                    task.wait(0.05)
+                else
+                    currentActiveHakari = nil
+                    local readyUnits = {}
+                    local maxEnergy = 0
+
+                    for _, u in ipairs(units) do
+                        local e = getHakariEnergy(u)
+                        if e > maxEnergy then maxEnergy = e end
+                        if e >= 100 then
+                            table.insert(readyUnits, u)
+                        end
+                    end
+
+                    if #readyUnits > 0 then
+                        local targetUnit = readyUnits[1]
+                        hakariUI.stateLabel.Text = "Firing Jackpot..."
+                        for _ = 1, 8 do
+                            castSkill(targetUnit)
+                            task.wait(0.05)
+                            if getHakariEnergy(targetUnit) < 98 then break end
+                        end
+                        currentActiveHakari = targetUnit
+                        hakariActiveUntil = os.clock() + HAKARI_DURATION
+                        hakariUI.countdownLabel.Text = string.format("Jackpot: %.1fs left", HAKARI_DURATION)
+                        hakariUI.stateLabel.Text = "Triggered 1 Unit!"
+                    else
+                        hakariUI.countdownLabel.Text = "Cooldown: Ready"
+                        hakariUI.stateLabel.Text = string.format("Charging: Max %d%%", maxEnergy)
+                        task.wait(0.05)
+                    end
+                end
+            end
+        else
+            hakariUI.countdownLabel.Text = "Cooldown: Stopped"
+            hakariUI.stateLabel.Text = "Status: OFF"
+            task.wait(0.3)
+        end
+    end
+end)
+
+local function executeErwinStep(stepIndex)
+    if not isErwinRunning then return end
+
+    currentActiveErwin = stepIndex
+    local targetUnit = lockedErwins[stepIndex]
+
+    if targetUnit and targetUnit.Parent and targetUnit:IsDescendantOf(workspace) then
+        castSkill(targetUnit)
+    end
+
+    if stepIndex == 1 then
+        erwinUI.stateLabel.Text = "Unit #1 buffs units 2, 3, and 4"
+    elseif stepIndex == 2 then
+        erwinUI.stateLabel.Text = "Unit #2 buffs units 1, 3, and 4"
+    elseif stepIndex == 3 then
+        erwinUI.stateLabel.Text = "Unit #3 buffs units 1, 2, and 4"
+    elseif stepIndex == 4 then
+        erwinUI.stateLabel.Text = "Unit #4 buffs units 1, 2, and 3"
+    end
+
+    local timer = ERWIN_INTERVAL
+    while isErwinRunning and timer > 0 do
+        erwinStepRemain = timer
+        erwinUI.countdownLabel.Text = string.format("Erwin #%d buffing (%.1fs)", stepIndex, timer)
+        task.wait(0.1)
+        timer = timer - 0.1
+    end
+end
+
+local function startErwinRotation()
+    if erwinThread then
+        task.cancel(erwinThread)
+        erwinThread = nil
+    end
+
+    erwinThread = task.spawn(function()
+        while isErwinRunning do
+            lockedErwins = getMyUnitsByNames(ERWIN_NAMES, ERWIN_REQUIRED)
+
+            if #lockedErwins < ERWIN_REQUIRED then
+                erwinUI.countdownLabel.Text = "Waiting for units..."
+                erwinUI.stateLabel.Text = string.format("Placed: %d/%d Erwin (need 4)", #lockedErwins, ERWIN_REQUIRED)
+                currentActiveErwin = 0
+                erwinStepRemain = 0
+                task.wait(0.5)
+            else
+                executeErwinStep(1)
+                executeErwinStep(2)
+                executeErwinStep(3)
+                executeErwinStep(4)
+            end
+        end
+    end)
+end
+
+task.spawn(function()
+    while true do
+        local units = #lockedErwins > 0 and lockedErwins or getMyUnitsByNames(ERWIN_NAMES, ERWIN_REQUIRED)
+        updateErwinDisplay(units)
+        if not isErwinRunning then
+            erwinUI.countdownLabel.Text = "Cooldown: Stopped"
+            erwinUI.stateLabel.Text = "Status: OFF"
+        end
+        task.wait(0.1)
+    end
+end)
+
+local function executeWendyStep(stepIndex)
+    if not isWendyRunning then return end
+
+    currentActiveWendy = stepIndex
+    local targetUnit = lockedWendys[stepIndex]
+
+    if targetUnit and targetUnit.Parent and targetUnit:IsDescendantOf(workspace) then
+        castSkill(targetUnit)
+    end
+
+    if stepIndex == 1 then
+        wendyUI.stateLabel.Text = "Unit #1 buffs units 2, 3, and 4"
+    elseif stepIndex == 2 then
+        wendyUI.stateLabel.Text = "Unit #2 buffs units 1, 3, and 4"
+    elseif stepIndex == 3 then
+        wendyUI.stateLabel.Text = "Unit #3 buffs units 1, 2, and 4"
+    elseif stepIndex == 4 then
+        wendyUI.stateLabel.Text = "Unit #4 buffs units 1, 2, and 3"
+    end
+
+    local timer = WENDY_INTERVAL
+    while isWendyRunning and timer > 0 do
+        wendyStepRemain = timer
+        wendyUI.countdownLabel.Text = string.format("Wendy #%d buffing (%.1fs)", stepIndex, timer)
+        task.wait(0.1)
+        timer = timer - 0.1
+    end
+end
+
+local function startWendyRotation()
+    if wendyThread then
+        task.cancel(wendyThread)
+        wendyThread = nil
+    end
+
+    wendyThread = task.spawn(function()
+        while isWendyRunning do
+            lockedWendys = getMyUnitsByNames(WENDY_NAMES, WENDY_REQUIRED)
+
+            if #lockedWendys < WENDY_REQUIRED then
+                wendyUI.countdownLabel.Text = "Waiting for units..."
+                wendyUI.stateLabel.Text = string.format("Placed: %d/%d Wendy (need 4)", #lockedWendys, WENDY_REQUIRED)
+                currentActiveWendy = 0
+                wendyStepRemain = 0
+                task.wait(0.5)
+            else
+                executeWendyStep(1)
+                executeWendyStep(2)
+                executeWendyStep(3)
+                executeWendyStep(4)
+            end
+        end
+    end)
+end
+
+task.spawn(function()
+    while true do
+        local units = #lockedWendys > 0 and lockedWendys or getMyUnitsByNames(WENDY_NAMES, WENDY_REQUIRED)
+        updateWendyDisplay(units)
+        if not isWendyRunning then
+            wendyUI.countdownLabel.Text = "Cooldown: Stopped"
+            wendyUI.stateLabel.Text = "Status: OFF"
+        end
+        task.wait(0.1)
+    end
+end)
+
+local function executeLeafaStep(stepIndex)
+    if not isLeafaRunning then return end
+
+    currentActiveLeafa = stepIndex
+    local targetUnit = lockedLeafas[stepIndex]
+
+    if targetUnit and targetUnit.Parent and targetUnit:IsDescendantOf(workspace) then
+        castSkill(targetUnit)
+    end
+
+    if stepIndex == 1 then
+        leafaUI.stateLabel.Text = "Unit #1 buffs units 2, 3, and 4"
+    elseif stepIndex == 2 then
+        leafaUI.stateLabel.Text = "Unit #2 buffs units 1, 3, and 4"
+    elseif stepIndex == 3 then
+        leafaUI.stateLabel.Text = "Unit #3 buffs units 1, 2, and 4"
+    elseif stepIndex == 4 then
+        leafaUI.stateLabel.Text = "Unit #4 buffs units 1, 2, and 3"
+    end
+
+    local timer = LEAFA_INTERVAL
+    while isLeafaRunning and timer > 0 do
+        leafaStepRemain = timer
+        leafaUI.countdownLabel.Text = string.format("Leafa #%d buffing (%.1fs)", stepIndex, timer)
+        task.wait(0.1)
+        timer = timer - 0.1
+    end
+end
+
+local function startLeafaRotation()
+    if leafaThread then
+        task.cancel(leafaThread)
+        leafaThread = nil
+    end
+
+    leafaThread = task.spawn(function()
+        while isLeafaRunning do
+            lockedLeafas = getMyUnitsByNames(LEAFA_NAMES, LEAFA_REQUIRED)
+
+            if #lockedLeafas < LEAFA_REQUIRED then
+                leafaUI.countdownLabel.Text = "Waiting for units..."
+                leafaUI.stateLabel.Text = string.format("Placed: %d/%d Leafa (need 4)", #lockedLeafas, LEAFA_REQUIRED)
+                currentActiveLeafa = 0
+                leafaStepRemain = 0
+                task.wait(0.5)
+            else
+                executeLeafaStep(1)
+                executeLeafaStep(2)
+                executeLeafaStep(3)
+                executeLeafaStep(4)
+            end
+        end
+    end)
+end
+
+task.spawn(function()
+    while true do
+        local units = #lockedLeafas > 0 and lockedLeafas or getMyUnitsByNames(LEAFA_NAMES, LEAFA_REQUIRED)
+        updateLeafaDisplay(units)
+        if not isLeafaRunning then
+            leafaUI.countdownLabel.Text = "Cooldown: Stopped"
+            leafaUI.stateLabel.Text = "Status: OFF"
+        end
+        task.wait(0.1)
+    end
+end)
+
+rukiaUI.toggleBtn.MouseButton1Click:Connect(function()
+    isRukiaRunning = not isRukiaRunning
+    config.Rukia = isRukiaRunning
+    saveConfig()
+    rukiaUI.toggleBtn.Text = isRukiaRunning and "ON" or "OFF"
+    rukiaUI.toggleBtn.BackgroundColor3 = isRukiaRunning and Color3.fromRGB(0, 170, 100) or Color3.fromRGB(150, 40, 50)
+end)
+
+hakariUI.toggleBtn.MouseButton1Click:Connect(function()
+    isHakariRunning = not isHakariRunning
+    config.Hakari = isHakariRunning
+    saveConfig()
+    hakariUI.toggleBtn.Text = isHakariRunning and "ON" or "OFF"
+    hakariUI.toggleBtn.BackgroundColor3 = isHakariRunning and Color3.fromRGB(0, 170, 100) or Color3.fromRGB(150, 40, 50)
+end)
+
+erwinUI.toggleBtn.MouseButton1Click:Connect(function()
+    isErwinRunning = not isErwinRunning
+    config.Erwin = isErwinRunning
+    saveConfig()
+    if isErwinRunning then
+        erwinUI.toggleBtn.Text = "ON"
+        erwinUI.toggleBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 100)
+        startErwinRotation()
+    else
+        erwinUI.toggleBtn.Text = "OFF"
+        erwinUI.toggleBtn.BackgroundColor3 = Color3.fromRGB(150, 40, 50)
+        currentActiveErwin = 0
+        erwinStepRemain = 0
+        lockedErwins = {}
+        if erwinThread then task.cancel(erwinThread) erwinThread = nil end
+    end
+end)
+
+wendyUI.toggleBtn.MouseButton1Click:Connect(function()
+    isWendyRunning = not isWendyRunning
+    config.Wendy = isWendyRunning
+    saveConfig()
+    if isWendyRunning then
+        wendyUI.toggleBtn.Text = "ON"
+        wendyUI.toggleBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 100)
+        startWendyRotation()
+    else
+        wendyUI.toggleBtn.Text = "OFF"
+        wendyUI.toggleBtn.BackgroundColor3 = Color3.fromRGB(150, 40, 50)
+        currentActiveWendy = 0
+        wendyStepRemain = 0
+        lockedWendys = {}
+        if wendyThread then task.cancel(wendyThread) wendyThread = nil end
+    end
+end)
+
+leafaUI.toggleBtn.MouseButton1Click:Connect(function()
+    isLeafaRunning = not isLeafaRunning
+    config.Leafa = isLeafaRunning
+    saveConfig()
+    if isLeafaRunning then
+        leafaUI.toggleBtn.Text = "ON"
+        leafaUI.toggleBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 100)
+        startLeafaRotation()
+    else
+        leafaUI.toggleBtn.Text = "OFF"
+        leafaUI.toggleBtn.BackgroundColor3 = Color3.fromRGB(150, 40, 50)
+        currentActiveLeafa = 0
+        leafaStepRemain = 0
+        lockedLeafas = {}
+        if leafaThread then task.cancel(leafaThread) leafaThread = nil end
+    end
+end)
+
+resetConfigBtn.MouseButton1Click:Connect(function()
+    for k, v in pairs(DefaultConfig) do
+        config[k] = v
+    end
+    saveConfig()
+
+    isRukiaRunning = config.Rukia
+    rukiaUI.toggleBtn.Text = isRukiaRunning and "ON" or "OFF"
+    rukiaUI.toggleBtn.BackgroundColor3 = isRukiaRunning and Color3.fromRGB(0, 170, 100) or Color3.fromRGB(150, 40, 50)
+
+    isHakariRunning = config.Hakari
+    hakariUI.toggleBtn.Text = isHakariRunning and "ON" or "OFF"
+    hakariUI.toggleBtn.BackgroundColor3 = isHakariRunning and Color3.fromRGB(0, 170, 100) or Color3.fromRGB(150, 40, 50)
+
+    isErwinRunning = config.Erwin
+    erwinUI.toggleBtn.Text = isErwinRunning and "ON" or "OFF"
+    erwinUI.toggleBtn.BackgroundColor3 = isErwinRunning and Color3.fromRGB(0, 170, 100) or Color3.fromRGB(150, 40, 50)
+    if isErwinRunning then startErwinRotation() end
+
+    isWendyRunning = config.Wendy
+    wendyUI.toggleBtn.Text = isWendyRunning and "ON" or "OFF"
+    wendyUI.toggleBtn.BackgroundColor3 = isWendyRunning and Color3.fromRGB(0, 170, 100) or Color3.fromRGB(150, 40, 50)
+    if isWendyRunning then startWendyRotation() end
+
+    isLeafaRunning = config.Leafa
+    leafaUI.toggleBtn.Text = isLeafaRunning and "ON" or "OFF"
+    leafaUI.toggleBtn.BackgroundColor3 = isLeafaRunning and Color3.fromRGB(0, 170, 100) or Color3.fromRGB(150, 40, 50)
+    if isLeafaRunning then startLeafaRotation() end
+
+    toggleKey = Enum.KeyCode[config.ToggleKey] or Enum.KeyCode.M
+    refreshKeyLabel()
+    syncStarVisibility()
+    UIBg.syncMica()
+
+    LoadCustomMediaFromPath("")
+    UIBg.load("")
+    UIBg.applyMica()
+    UIBg.applyBackground()
+    for _, syncFn in ipairs(SyncSpoofUi) do
+        pcall(syncFn)
+    end
+    FullRescanAll()
+end)
+
+local function WatchScreenGuiEnable(sg)
+    if not sg or not sg:IsA("ScreenGui") or WatchedGuis[sg] then
+        return
+    end
+    WatchedGuis[sg] = true
+    table.insert(SpoofConnections, sg:GetPropertyChangedSignal("Enabled"):Connect(function()
+        if sg.Enabled then
+            task.defer(function()
+                ApplySpecificPlayerGuiSpoof()
+            end)
+        end
+    end))
+end
+
+local function BindSpoofDynamicListeners()
+    local wsTourney = workspace:FindFirstChild("_TOURNAMENT")
+    if wsTourney then
+        table.insert(SpoofConnections, wsTourney.DescendantAdded:Connect(function(desc)
+            if desc:IsA("Frame") and (desc.Name == "LeaderboardFrameLevelSelect" or desc.Name == "Top" or desc.Name == "YourRow") then
+                task.defer(function()
+                    ApplyTournamentBoardsSpoof()
+                end)
+            end
+        end))
+    end
+
+    local pGui = LocalPlayer:WaitForChild("PlayerGui")
+    for _, child in ipairs(pGui:GetChildren()) do
+        if child.Name == "ResultsUI" or child.Name == "TournamentScoreUI" or child.Name == "TournamentResultsUI" or child.Name == "TournamentRankingUI" or child.Name == "PartyUI" then
+            WatchScreenGuiEnable(child)
+        end
+    end
+
+    table.insert(SpoofConnections, pGui.ChildAdded:Connect(function(child)
+        if child.Name == "ResultsUI" or child.Name == "TournamentScoreUI" or child.Name == "TournamentResultsUI" or child.Name == "TournamentRankingUI" or child.Name == "PartyUI" then
+            WatchScreenGuiEnable(child)
+            task.defer(function()
+                ApplySpecificPlayerGuiSpoof()
+            end)
+        end
+    end))
+
+    table.insert(SpoofConnections, pGui.DescendantAdded:Connect(function(desc)
+        if desc:IsDescendantOf(screenGui) then
+            return
+        end
+        if desc:IsA("Frame") and (desc.Name == "LeaderboardFrameLevelSelect" or desc.Name == "Top" or desc.Name == "YourRow") then
+            task.defer(function()
+                ApplyTournamentBoardsSpoof()
+            end)
+        elseif desc.Name == "PlayerFrame" and desc.Parent and desc.Parent.Name == "Members" then
+            task.defer(function()
+                ApplySpecificPlayerGuiSpoof()
+            end)
+        elseif desc.Name == "TournamentScoreUI" or desc.Name == "ResultsUI" or desc.Name == "TournamentResultsUI" or desc.Name == "HighScore" or desc.Name == "Score" then
+            task.defer(function()
+                ApplyInGameAndResultsSpoof()
+            end)
+        end
+    end))
+end
+
+table.insert(SpoofConnections, LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(0.6)
+    ApplyOverheadSpoof()
+end))
+
+table.insert(SpoofConnections, RunService.Heartbeat:Connect(function(dt)
+    if config.HidePartyPanel then
+        ApplyPartyVisibility()
+    end
+    if config.HideRobloxChat then
+        pcall(function()
+            StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.Chat, false)
+        end)
+    end
+    if config.SpoofGuild and CustomMediaState.Mode == "frames" and #CustomMediaState.Frames > 1 then
+        local interval = 1 / math.max(1, config.GifFps)
+        CustomMediaState.Accumulator = CustomMediaState.Accumulator + dt
+        if CustomMediaState.Accumulator >= interval then
+            CustomMediaState.Accumulator = CustomMediaState.Accumulator % interval
+            CustomMediaState.CurrentFrame = (CustomMediaState.CurrentFrame % #CustomMediaState.Frames) + 1
+            local nextUri = CustomMediaState.Frames[CustomMediaState.CurrentFrame]
+            for iconObj, overlay in pairs(MediaOverlays) do
+                if iconObj and iconObj.Parent and overlay and overlay.Parent and overlay:IsA("ImageLabel") then
+                    SetSafeImage(iconObj, nextUri)
+                    overlay.Image = nextUri
+                end
+            end
+        end
+    end
+    if config.Mica and UIBg.state.Mode == "frames" and #UIBg.state.Frames > 1 then
+        local interval = 1 / math.max(1, config.GifFps)
+        UIBg.state.Accumulator = UIBg.state.Accumulator + dt
+        if UIBg.state.Accumulator >= interval then
+            UIBg.state.Accumulator = UIBg.state.Accumulator % interval
+            UIBg.state.CurrentFrame = (UIBg.state.CurrentFrame % #UIBg.state.Frames) + 1
+            if UIBg.img and UIBg.img.Visible then
+                UIBg.img.Image = UIBg.state.Frames[UIBg.state.CurrentFrame]
+            end
+        end
+    end
+end))
+
+if isErwinRunning then startErwinRotation() end
+if isWendyRunning then startWendyRotation() end
+if isLeafaRunning then startLeafaRotation() end
+
+FullRescanAll()
+BindSpoofDynamicListeners()
