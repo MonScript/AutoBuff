@@ -2368,7 +2368,7 @@ addTreeInput(catBoards, 3, "Fake Your DMG / Score", "192.1204B", "FakeScore", fu
     ApplyInGameAndResultsSpoof()
 end)
 addTreeToggle(catBoards, 4, "Spoof In-Game & Result Scores", "SpoofInGameScores", ApplyInGameAndResultsSpoof)
-addTreeToggle(catBoards, 5, "Show DMG on Match Results", "ShowResultDMG", ApplyInGameAndResultsSpoof)
+addTreeToggle(catBoards, 5, "Show DMG After Match (ON/OFF)", "ShowResultDMG", ApplyInGameAndResultsSpoof)
 addTreeInput(catBoards, 6, "Fake High Score (Empty = Same)", "192.1204B", "FakeHighScore", function(v)
     config.FakeHighScore = v
     ApplyInGameAndResultsSpoof()
