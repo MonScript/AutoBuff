@@ -160,17 +160,17 @@ local isHakariRunning = config.Hakari
 
 local ERWIN_NAMES = {"erwin", "erwin:shiny"}
 local ERWIN_REQUIRED = 4
-local ERWIN_INTERVAL = 14.0
+local ERWIN_INTERVAL = 14.8
 local isErwinRunning = config.Erwin
 
 local WENDY_NAMES = {"wendy", "wendy_halloween", "wendy:shiny"}
 local WENDY_REQUIRED = 4
-local WENDY_INTERVAL = 13.5
+local WENDY_INTERVAL = 13.8
 local isWendyRunning = config.Wendy
 
 local LEAFA_NAMES = {"leafa", "leafa:shiny"}
 local LEAFA_REQUIRED = 4
-local LEAFA_INTERVAL = 13.5
+local LEAFA_INTERVAL = 13.8
 local isLeafaRunning = config.Leafa
 
 local placementSeq = {}
