@@ -80,6 +80,7 @@ local DefaultConfig = {
     SpoofInGameScores = true,
     FakeHighScore = "",
     FakeCurrentScore = "",
+    ShowResultDMG = false,
 
     HidePartyPanel = false,
     HideRobloxChat = false,
@@ -935,11 +936,11 @@ local function ApplyInGameAndResultsSpoof()
         if middle then
             local highV = middle:FindFirstChild("HighScore") and middle.HighScore:FindFirstChild("V")
             if highV then
-                HookTextLabel(highV, ResolveHighScore(true))
+                HookTextLabel(highV, ResolveHighScore(config.ShowResultDMG))
             end
             local scoreV = middle:FindFirstChild("Score") and middle.Score:FindFirstChild("V")
             if scoreV then
-                HookTextLabel(scoreV, ResolveCurrentScore(true))
+                HookTextLabel(scoreV, ResolveCurrentScore(config.ShowResultDMG))
             end
         end
     end
@@ -965,7 +966,7 @@ local function ApplyInGameAndResultsSpoof()
             and tourneyResults.Main.Wrapper.TournamentHolder.ScoreInfo:FindFirstChild("HighScore")
             and tourneyResults.Main.Wrapper.TournamentHolder.ScoreInfo.HighScore:FindFirstChild("V")
         if hsV then
-            HookTextLabel(hsV, ResolveHighScore(true))
+            HookTextLabel(hsV, ResolveHighScore(config.ShowResultDMG))
         end
     end
 end
@@ -2367,11 +2368,12 @@ addTreeInput(catBoards, 3, "Fake Your DMG / Score", "192.1204B", "FakeScore", fu
     ApplyInGameAndResultsSpoof()
 end)
 addTreeToggle(catBoards, 4, "Spoof In-Game & Result Scores", "SpoofInGameScores", ApplyInGameAndResultsSpoof)
-addTreeInput(catBoards, 5, "Fake High Score (Empty = Same)", "192.1204B", "FakeHighScore", function(v)
+addTreeToggle(catBoards, 5, "Show DMG on Match Results", "ShowResultDMG", ApplyInGameAndResultsSpoof)
+addTreeInput(catBoards, 6, "Fake High Score (Empty = Same)", "192.1204B", "FakeHighScore", function(v)
     config.FakeHighScore = v
     ApplyInGameAndResultsSpoof()
 end)
-addTreeInput(catBoards, 6, "Fake Run Score (Empty = Real)", "Keep real run DMG", "FakeCurrentScore", function(v)
+addTreeInput(catBoards, 7, "Fake Run Score (Empty = Real)", "Keep real run DMG", "FakeCurrentScore", function(v)
     config.FakeCurrentScore = v
     ApplyInGameAndResultsSpoof()
 end)
