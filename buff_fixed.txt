@@ -7,6 +7,11 @@ local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 
+local ENV = (getgenv and getgenv()) or _G
+if ENV.__MonSkillHubCleanup then
+    pcall(ENV.__MonSkillHubCleanup)
+end
+
 local LocalPlayer = Players.LocalPlayer
 if not LocalPlayer then
     Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
@@ -79,7 +84,9 @@ local DefaultConfig = {
 
     SpoofInGameScores = true,
     FakeHighScore = "",
+    FakeHighScoreSub = "",
     FakeCurrentScore = "",
+    FakeCurrentScoreSub = "",
     ShowResultDMG = false,
 
     HidePartyPanel = false,
@@ -161,18 +168,27 @@ local isHakariRunning = config.Hakari
 
 local ERWIN_NAMES = {"erwin", "erwin:shiny"}
 local ERWIN_REQUIRED = 4
-local ERWIN_INTERVAL = 14.8
+local ERWIN_INTERVAL = 15.8
 local isErwinRunning = config.Erwin
 
 local WENDY_NAMES = {"wendy", "wendy_halloween", "wendy:shiny"}
 local WENDY_REQUIRED = 4
-local WENDY_INTERVAL = 13.8
+local WENDY_INTERVAL = 15.2
 local isWendyRunning = config.Wendy
 
-local LEAFA_NAMES = {"leafa", "leafa:shiny"}
+local LEAFA_NAMES = {"leafa_evolved", "leafa", "leafa:shiny"}
 local LEAFA_REQUIRED = 4
-local LEAFA_INTERVAL = 13.8
+local LEAFA_INTERVAL = 15.2
 local isLeafaRunning = config.Leafa
+
+local ActiveThreads = {}
+local SpoofConnections = {}
+
+local function trackThread(fn)
+    local t = task.spawn(fn)
+    table.insert(ActiveThreads, t)
+    return t
+end
 
 local placementSeq = {}
 local placementCounter = 0
@@ -183,14 +199,17 @@ local function assignPlacement(unit)
     end
 end
 
-task.spawn(function()
+trackThread(function()
     local folder = workspace:WaitForChild("_UNITS", 30)
     if not folder then return end
-    for _, u in ipairs(folder:GetChildren()) do assignPlacement(u) end
-    folder.ChildAdded:Connect(function(u)
+    for _, u in ipairs(folder:GetChildren()) do
+        assignPlacement(u)
+    end
+    local conn = folder.ChildAdded:Connect(function(u)
         task.wait(0.2)
         assignPlacement(u)
     end)
+    table.insert(SpoofConnections, conn)
 end)
 
 local endpoints = ReplicatedStorage:WaitForChild("endpoints", 10)
@@ -309,27 +328,43 @@ local function getHakariEnergy(unit)
     return 0
 end
 
-local function getMyUnitsByNames(namesList, maxCount)
+local function getMyUnitsByNames(namesList, maxCount, requireActiveUnlocked)
     local units = {}
     local unitsFolder = workspace:FindFirstChild("_UNITS")
     if unitsFolder then
         for _, unit in ipairs(unitsFolder:GetChildren()) do
+            local stats = unit:FindFirstChild("_stats")
+            local idObj = stats and stats:FindFirstChild("id")
+            local unitIdStr = (idObj and tostring(idObj.Value) or ""):lower()
+            local unitNameStr = unit.Name:lower()
+
             local isMatch = false
             for _, name in ipairs(namesList) do
-                if unit.Name:lower() == name:lower() then
+                local target = name:lower()
+                if (unitIdStr ~= "" and unitIdStr == target) or unitNameStr == target then
                     isMatch = true
                     break
                 end
             end
+
             if isMatch then
-                local stats = unit:FindFirstChild("_stats")
                 local isOwner = false
                 if stats and stats:FindFirstChild("player") then
                     if stats.player.Value == LocalPlayer then isOwner = true end
                 else
                     isOwner = true
                 end
-                if isOwner then table.insert(units, unit) end
+
+                if isOwner and requireActiveUnlocked then
+                    local activeAtk = stats and stats:FindFirstChild("active_attack")
+                    if not activeAtk or tostring(activeAtk.Value) == "nil" or tostring(activeAtk.Value) == "" then
+                        isOwner = false
+                    end
+                end
+
+                if isOwner then
+                    table.insert(units, unit)
+                end
             end
         end
     end
@@ -362,7 +397,6 @@ local ResolversImage = setmetatable({}, {__mode = "k"})
 local MediaOverlays = setmetatable({}, {__mode = "k"})
 local WatchedGuis = setmetatable({}, {__mode = "k"})
 local HiddenElements = {}
-local SpoofConnections = {}
 
 local CustomMediaState = {
     Mode = "none",
@@ -523,12 +557,10 @@ local function LoadCustomMediaFromPath(targetPath)
             local okFile, existsFile = pcall(isfile, targetPath)
             if okFile and existsFile then
                 local low = targetPath:lower()
-                -- Náº¿u lÃ  file .gif ÄÆ¡n hoáº·c video .webm/.mp4
                 if low:match("%.webm$") or low:match("%.mp4$") then
                     CustomMediaState.Status = "Local video can't play in Roblox. VideoFrame only accepts an uploaded rbxassetid:// video. Convert the GIF/video into a folder of PNG frames and pick the [GIF Folder] entry instead."
                     return
                 else
-                    -- Äá»i vá»i file .gif tÄ©nh hoáº·c áº£nh thÃ´ng thÆ°á»ng (.png, .jpg, .gif)
                     local okAsset, assetUri = pcall(toAsset, targetPath)
                     if okAsset and assetUri then
                         CustomMediaState.Mode = "image"
@@ -869,50 +901,136 @@ local function ApplyPartyVisibility()
     end
 end
 
+local RichTextLabels = setmetatable({}, {__mode = "k"})
+
 local function ApplyInGameAndResultsSpoof()
     local pGui = LocalPlayer:FindFirstChild("PlayerGui")
     if not pGui then
         return
     end
 
-    -- Trong ván: chỉ hiển thị giá trị, không thêm hậu tố DMG.
-    -- Màn hình kết quả: giữ định dạng DMG như game gốc.
-    local function FormatScoreForDisplay(val, showDmg)
+    local function CleanPart(val, showDmg)
         if type(val) ~= "string" then
             return ""
         end
-
         local trimmed = val:match("^%s*(.-)%s*$")
         if trimmed == "" then
             return ""
         end
-
         if showDmg then
             return FormatDmgText(trimmed)
         end
-
         return (trimmed:gsub("%s*[Dd][Mm][Gg]%s*$", ""))
     end
 
-    local function ResolveHighScore(showDmg)
-        return function(orig)
-            if not config.SpoofInGameScores then
-                return orig
+    local function EscapeXml(str)
+        return (str:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"))
+    end
+
+    local function BuildRichScore(mainRaw, subRaw, showDmg, obj)
+        local mainTxt = CleanPart(mainRaw, showDmg and (subRaw == nil or subRaw:match("^%s*$")))
+        local subTxt = CleanPart(subRaw or "", showDmg)
+        if mainTxt == "" and subTxt == "" then
+            return nil
+        end
+        if subTxt == "" then
+            return mainTxt, false
+        end
+        if not subTxt:match("^/") then
+            subTxt = "/" .. subTxt
+        end
+        local baseColor = (obj and obj:IsA("TextLabel")) and obj.TextColor3 or Color3.fromRGB(255, 255, 255)
+        local r = math.floor(baseColor.R * 255 * 0.72)
+        local g = math.floor(baseColor.G * 255 * 0.72)
+        local b = math.floor(baseColor.B * 255 * 0.72)
+        local hex = string.format("#%02X%02X%02X", r, g, b)
+        local rich = EscapeXml(mainTxt) .. string.format('<font color="%s" transparency="0.28">%s</font>', hex, EscapeXml(subTxt))
+        return rich, true
+    end
+
+    local function FindSubLabel(vObj)
+        if not (vObj and vObj.Parent) then
+            return nil
+        end
+        for _, sib in ipairs(vObj.Parent:GetChildren()) do
+            if sib ~= vObj and sib:IsA("TextLabel") then
+                local n = sib.Name:lower()
+                if n == "d" or n == "dmg" or n == "sub" or n == "v2" or n == "damage" or n == "secondary" then
+                    return sib
+                end
             end
-            local rawVal = (config.FakeHighScore ~= "" and config.FakeHighScore) or config.FakeScore
-            local formatted = FormatScoreForDisplay(rawVal, showDmg)
-            return formatted ~= "" and formatted or orig
+        end
+        return nil
+    end
+
+    local function HookScoreSlot(vObj, getMain, getSub, showDmg)
+        if not vObj then
+            return
+        end
+        local subObj = FindSubLabel(vObj)
+        if subObj then
+            HookTextLabel(vObj, function(orig)
+                if not config.SpoofInGameScores then
+                    return orig
+                end
+                local m = getMain()
+                local formatted = CleanPart(m, false)
+                return formatted ~= "" and formatted or orig
+            end)
+            HookTextLabel(subObj, function(orig)
+                if not config.SpoofInGameScores then
+                    return orig
+                end
+                local s = getSub()
+                if type(s) ~= "string" or s:match("^%s*$") then
+                    return ""
+                end
+                local formatted = CleanPart(s, showDmg)
+                if formatted ~= "" and not formatted:match("^/") then
+                    formatted = "/" .. formatted
+                end
+                return formatted
+            end)
+        else
+            HookTextLabel(vObj, function(orig, target)
+                if not config.SpoofInGameScores then
+                    if RichTextLabels[target] then
+                        pcall(function() target.RichText = false end)
+                        RichTextLabels[target] = nil
+                    end
+                    return orig
+                end
+                local res, isRich = BuildRichScore(getMain(), getSub(), showDmg, target)
+                if not res then
+                    if RichTextLabels[target] then
+                        pcall(function() target.RichText = false end)
+                        RichTextLabels[target] = nil
+                    end
+                    return orig
+                end
+                if isRich then
+                    RichTextLabels[target] = true
+                    pcall(function() target.RichText = true end)
+                elseif RichTextLabels[target] then
+                    pcall(function() target.RichText = false end)
+                    RichTextLabels[target] = nil
+                end
+                return res
+            end)
         end
     end
 
-    local function ResolveCurrentScore(showDmg)
-        return function(orig)
-            if not config.SpoofInGameScores or config.FakeCurrentScore == "" then
-                return orig
-            end
-            local formatted = FormatScoreForDisplay(config.FakeCurrentScore, showDmg)
-            return formatted ~= "" and formatted or orig
-        end
+    local getHighMain = function()
+        return (config.FakeHighScore ~= "" and config.FakeHighScore) or config.FakeScore
+    end
+    local getHighSub = function()
+        return config.FakeHighScoreSub
+    end
+    local getCurMain = function()
+        return config.FakeCurrentScore
+    end
+    local getCurSub = function()
+        return config.FakeCurrentScoreSub
     end
 
     local tourneyScoreUI = pGui:FindFirstChild("TournamentScoreUI")
@@ -920,13 +1038,9 @@ local function ApplyInGameAndResultsSpoof()
         local main = tourneyScoreUI:FindFirstChild("Main")
         if main then
             local highV = main:FindFirstChild("HighScore") and main.HighScore:FindFirstChild("V")
-            if highV then
-                HookTextLabel(highV, ResolveHighScore(false))
-            end
+            HookScoreSlot(highV, getHighMain, getHighSub, false)
             local scoreV = main:FindFirstChild("Score") and main.Score:FindFirstChild("V")
-            if scoreV then
-                HookTextLabel(scoreV, ResolveCurrentScore(false))
-            end
+            HookScoreSlot(scoreV, getCurMain, getCurSub, false)
         end
     end
 
@@ -935,13 +1049,9 @@ local function ApplyInGameAndResultsSpoof()
         local middle = resultsUI:FindFirstChild("Holder") and resultsUI.Holder:FindFirstChild("Middle")
         if middle then
             local highV = middle:FindFirstChild("HighScore") and middle.HighScore:FindFirstChild("V")
-            if highV then
-                HookTextLabel(highV, ResolveHighScore(config.ShowResultDMG))
-            end
+            HookScoreSlot(highV, getHighMain, getHighSub, config.ShowResultDMG)
             local scoreV = middle:FindFirstChild("Score") and middle.Score:FindFirstChild("V")
-            if scoreV then
-                HookTextLabel(scoreV, ResolveCurrentScore(config.ShowResultDMG))
-            end
+            HookScoreSlot(scoreV, getCurMain, getCurSub, config.ShowResultDMG)
         end
     end
 
@@ -952,9 +1062,7 @@ local function ApplyInGameAndResultsSpoof()
             and tourneyRanking.LevelSelect.InfoFrame:FindFirstChild("ScoreInfo")
             and tourneyRanking.LevelSelect.InfoFrame.ScoreInfo:FindFirstChild("HighScore")
             and tourneyRanking.LevelSelect.InfoFrame.ScoreInfo.HighScore:FindFirstChild("V")
-        if hsV then
-            HookTextLabel(hsV, ResolveHighScore(true))
-        end
+        HookScoreSlot(hsV, getHighMain, getHighSub, true)
     end
 
     local tourneyResults = pGui:FindFirstChild("TournamentResultsUI")
@@ -965,9 +1073,7 @@ local function ApplyInGameAndResultsSpoof()
             and tourneyResults.Main.Wrapper.TournamentHolder:FindFirstChild("ScoreInfo")
             and tourneyResults.Main.Wrapper.TournamentHolder.ScoreInfo:FindFirstChild("HighScore")
             and tourneyResults.Main.Wrapper.TournamentHolder.ScoreInfo.HighScore:FindFirstChild("V")
-        if hsV then
-            HookTextLabel(hsV, ResolveHighScore(config.ShowResultDMG))
-        end
+        HookScoreSlot(hsV, getHighMain, getHighSub, config.ShowResultDMG)
     end
 end
 
@@ -1329,14 +1435,25 @@ local function ProcessSingleLeaderboard(board)
         if iLbl then SaveOriginalImage(iLbl) end
 
         local origUser = uLbl and OriginalText[uLbl] or ""
+        local origAmt = aLbl and OriginalText[aLbl] or "0"
+        local origIcon = iLbl and OriginalImage[iLbl] or "rbxthumb://type=AvatarHeadShot&id=1&w=420&h=420"
         local isSelf = origUser:lower():find(RealUsername:lower(), 1, true) ~= nil
         if not isSelf then
-            table.insert(realEntries, {
-                IsLocal = false,
-                Username = "@Unknown",
-                Amount = "No. No. No",
-                Icon = "rbxthumb://type=AvatarHeadShot&id=1&w=420&h=420"
-            })
+            if config.SpoofOthers then
+                table.insert(realEntries, {
+                    IsLocal = false,
+                    Username = "@Unknown",
+                    Amount = "No. No. No",
+                    Icon = "rbxthumb://type=AvatarHeadShot&id=1&w=420&h=420"
+                })
+            else
+                table.insert(realEntries, {
+                    IsLocal = false,
+                    Username = origUser,
+                    Amount = origAmt,
+                    Icon = origIcon
+                })
+            end
         end
     end
 
@@ -1345,11 +1462,14 @@ local function ProcessSingleLeaderboard(board)
         targetRank = 1
     end
 
+    local displayUser = config.SpoofIdentity and ("@" .. (config.FakeUsername ~= "" and config.FakeUsername or "HiddenUser")) or ("@" .. RealUsername)
+    local displayIconId = config.SpoofIdentity and (config.FakeUserId ~= "" and config.FakeUserId or "1") or RealUserId
+
     local localEntry = {
         IsLocal = true,
-        Username = "@Unknown",
+        Username = displayUser,
         Amount = config.FakeScore ~= "" and config.FakeScore or "0",
-        Icon = "rbxthumb://type=AvatarHeadShot&id=" .. (config.FakeUserId ~= "" and config.FakeUserId or "1") .. "&w=420&h=420"
+        Icon = "rbxthumb://type=AvatarHeadShot&id=" .. displayIconId .. "&w=420&h=420"
     }
 
     local insertIdx = math.min(targetRank, #realEntries + 1)
@@ -1373,9 +1493,9 @@ local function ProcessSingleLeaderboard(board)
         local yourPayload = {
             IsLocal = true,
             Place = "#" .. tostring(targetRank),
-            Username = "@Unknown",
+            Username = displayUser,
             Amount = config.FakeScore ~= "" and config.FakeScore or "0",
-            Icon = "rbxthumb://type=AvatarHeadShot&id=" .. (config.FakeUserId ~= "" and config.FakeUserId or "1") .. "&w=420&h=420"
+            Icon = "rbxthumb://type=AvatarHeadShot&id=" .. displayIconId .. "&w=420&h=420"
         }
         ApplyBoardRowData(yourRow, yourPayload, false)
     end
@@ -1411,6 +1531,10 @@ local function RestoreAllSpoofOriginals()
     for obj, orig in pairs(OriginalText) do
         if obj and obj.Parent then
             ResolversText[obj] = nil
+            if RichTextLabels[obj] then
+                pcall(function() obj.RichText = false end)
+                RichTextLabels[obj] = nil
+            end
             Updating[obj] = true
             pcall(function()
                 obj.Text = orig
@@ -1501,8 +1625,8 @@ UIBg.img.BorderSizePixel = 0
 UIBg.img.ScaleType = Enum.ScaleType.Crop
 UIBg.img.ZIndex = 1
 UIBg.img.ImageTransparency = 0.3
-UIBg.img.Visible = showBg
-    UIBg.img.Active = false
+UIBg.img.Visible = (config.Mica == true) and (UIBg.state.Mode ~= "none")
+UIBg.img.Active = false
 UIBg.img.Parent = mainFrame
 do
     local c = Instance.new("UICorner")
@@ -2176,6 +2300,7 @@ local function rebuildMediaFileList()
             CustomMediaState.updateStatus()
             FullRescanAll()
             rebuildMediaFileList()
+            if config.Mica then UIBg.applyMica() end
         end)
     end
 end
@@ -2183,6 +2308,7 @@ end
 refreshFolderBtn.MouseButton1Click:Connect(function()
     playClick()
     rebuildMediaFileList()
+    if config.Mica then UIBg.applyMica() end
     if config.SelectedMediaPath ~= "" then
         LoadCustomMediaFromPath(config.SelectedMediaPath)
         CustomMediaState.updateStatus()
@@ -2315,8 +2441,8 @@ do
                 UIBg.load(item.Path)
                 UIBg.updateStatus()
                 UIBg.applyBackground()
-                if config.Mica then UIBg.applyMica() end
                 UIBg.rebuild()
+                if config.Mica then UIBg.applyMica() end
             end)
         end
     end
@@ -2324,6 +2450,7 @@ do
     refreshBtn.MouseButton1Click:Connect(function()
         playClick()
         UIBg.rebuild()
+        if config.Mica then UIBg.applyMica() end
         if config.UIBgPath ~= "" then
             UIBg.load(config.UIBgPath)
             UIBg.updateStatus()
@@ -2369,12 +2496,99 @@ addTreeInput(catBoards, 3, "Fake Your DMG / Score", "192.1204B", "FakeScore", fu
 end)
 addTreeToggle(catBoards, 4, "Spoof In-Game & Result Scores", "SpoofInGameScores", ApplyInGameAndResultsSpoof)
 addTreeToggle(catBoards, 5, "Show DMG After Match (ON/OFF)", "ShowResultDMG", ApplyInGameAndResultsSpoof)
-addTreeInput(catBoards, 6, "Fake High Score (Empty = Same)", "192.1204B", "FakeHighScore", function(v)
-    config.FakeHighScore = v
+local function addTreeDualInput(parent, order, labelText, ph1, key1, ph2, key2, onCommit)
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1, 0, 0, 30)
+    row.LayoutOrder = order
+    row.BackgroundColor3 = Color3.fromRGB(16, 20, 38)
+    row.BorderSizePixel = 0
+    row.Parent = parent
+
+    local rc = Instance.new("UICorner")
+    rc.CornerRadius = UDim.new(0, 4)
+    rc.Parent = row
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(0.42, -8, 1, 0)
+    lbl.Position = UDim2.new(0, 8, 0, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = labelText
+    lbl.TextColor3 = Color3.fromRGB(215, 225, 245)
+    lbl.Font = Enum.Font.GothamMedium
+    lbl.TextSize = 10
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.TextTruncate = Enum.TextTruncate.AtEnd
+    lbl.Parent = row
+
+    local box1 = Instance.new("TextBox")
+    box1.Size = UDim2.new(0.28, -4, 0, 20)
+    box1.Position = UDim2.new(0.42, 0, 0.5, -10)
+    box1.BackgroundColor3 = Color3.fromRGB(10, 14, 28)
+    box1.PlaceholderText = ph1 or ""
+    box1.PlaceholderColor3 = Color3.fromRGB(100, 115, 145)
+    box1.TextColor3 = Color3.fromRGB(240, 246, 255)
+    box1.Font = Enum.Font.GothamBold
+    box1.TextSize = 10
+    box1.ClearTextOnFocus = false
+    box1.Parent = row
+
+    local bc1 = Instance.new("UICorner")
+    bc1.CornerRadius = UDim.new(0, 4)
+    bc1.Parent = box1
+
+    local bs1 = Instance.new("UIStroke")
+    bs1.Thickness = 1
+    bs1.Color = Color3.fromRGB(40, 55, 85)
+    bs1.Parent = box1
+
+    local box2 = Instance.new("TextBox")
+    box2.Size = UDim2.new(0.28, -4, 0, 20)
+    box2.Position = UDim2.new(0.71, 0, 0.5, -10)
+    box2.BackgroundColor3 = Color3.fromRGB(10, 14, 28)
+    box2.PlaceholderText = ph2 or ""
+    box2.PlaceholderColor3 = Color3.fromRGB(100, 115, 145)
+    box2.TextColor3 = Color3.fromRGB(165, 180, 210)
+    box2.Font = Enum.Font.Gotham
+    box2.TextSize = 10
+    box2.ClearTextOnFocus = false
+    box2.Parent = row
+
+    local bc2 = Instance.new("UICorner")
+    bc2.CornerRadius = UDim.new(0, 4)
+    bc2.Parent = box2
+
+    local bs2 = Instance.new("UIStroke")
+    bs2.Thickness = 1
+    bs2.Color = Color3.fromRGB(40, 55, 85)
+    bs2.Parent = box2
+
+    local function sync()
+        box1.Text = tostring(config[key1] or "")
+        box2.Text = tostring(config[key2] or "")
+    end
+
+    sync()
+    table.insert(SyncSpoofUi, sync)
+
+    box1.FocusLost:Connect(function()
+        config[key1] = box1.Text
+        if onCommit then onCommit() end
+        sync()
+        saveConfig()
+    end)
+
+    box2.FocusLost:Connect(function()
+        config[key2] = box2.Text
+        if onCommit then onCommit() end
+        sync()
+        saveConfig()
+    end)
+end
+
+addTreeDualInput(catBoards, 6, "Fake High Score", "35 KILLS", "FakeHighScore", "/6.24B", "FakeHighScoreSub", function()
     ApplyInGameAndResultsSpoof()
 end)
-addTreeInput(catBoards, 7, "Fake Run Score (Empty = Real)", "Keep real run DMG", "FakeCurrentScore", function(v)
-    config.FakeCurrentScore = v
+addTreeDualInput(catBoards, 7, "Fake Run Score", "35 KILLS", "FakeCurrentScore", "/6.12B", "FakeCurrentScoreSub", function()
     ApplyInGameAndResultsSpoof()
 end)
 
@@ -2551,6 +2765,7 @@ do
         saveConfig()
         UIBg.syncMica()
         UIBg.applyMica()
+        UIBg.updateStatus()
     end)
 end
 
@@ -2619,8 +2834,6 @@ byMonLabel.Font = Enum.Font.GothamBold
 byMonLabel.TextXAlignment = Enum.TextXAlignment.Left
 byMonLabel.Parent = mainFrame
 
--- Removed problematic ZIndex override to restore button clicks
-
 pcall(UIBg.applyMica)
 pcall(UIBg.applyBackground)
 
@@ -2670,7 +2883,7 @@ end
 
 openCloseBtn.MouseButton1Click:Connect(toggleUIVisibility)
 
-UserInputService.InputBegan:Connect(function(input, gp)
+table.insert(SpoofConnections, UserInputService.InputBegan:Connect(function(input, gp)
     if awaitingKey then
         if input.KeyCode ~= Enum.KeyCode.Unknown then
             toggleKey = input.KeyCode
@@ -2703,7 +2916,7 @@ UserInputService.InputBegan:Connect(function(input, gp)
             end
         end
     end
-end)
+end))
 
 showPanel("buff")
 
@@ -2825,7 +3038,7 @@ local function updateLeafaDisplay(units)
     end
 end
 
-task.spawn(function()
+trackThread(function()
     while true do
         local units = getMyUnitsByNames(RUKIA_NAMES, RUKIA_REQUIRED)
         updateRukiaDisplay(units)
@@ -2897,7 +3110,7 @@ task.spawn(function()
     end
 end)
 
-task.spawn(function()
+trackThread(function()
     while true do
         local units = getMyUnitsByNames(HAKARI_NAMES, HAKARI_REQUIRED)
         updateHakariDisplay(units)
@@ -2956,15 +3169,21 @@ task.spawn(function()
     end
 end)
 
+local function isUnitStillPlaced(u)
+    local unitsFolder = workspace:FindFirstChild("_UNITS")
+    return u ~= nil and unitsFolder ~= nil and u.Parent == unitsFolder
+end
+
 local function executeErwinStep(stepIndex)
-    if not isErwinRunning then return end
+    if not isErwinRunning then return false end
+
+    local targetUnit = lockedErwins[stepIndex]
+    if not isUnitStillPlaced(targetUnit) then
+        return false
+    end
 
     currentActiveErwin = stepIndex
-    local targetUnit = lockedErwins[stepIndex]
-
-    if targetUnit and targetUnit.Parent and targetUnit:IsDescendantOf(workspace) then
-        castSkill(targetUnit)
-    end
+    castSkill(targetUnit)
 
     if stepIndex == 1 then
         erwinUI.stateLabel.Text = "Unit #1 buffs units 2, 3, and 4"
@@ -2976,44 +3195,59 @@ local function executeErwinStep(stepIndex)
         erwinUI.stateLabel.Text = "Unit #4 buffs units 1, 2, and 3"
     end
 
-    local timer = ERWIN_INTERVAL
-    while isErwinRunning and timer > 0 do
-        erwinStepRemain = timer
-        erwinUI.countdownLabel.Text = string.format("Erwin #%d buffing (%.1fs)", stepIndex, timer)
+    local deadline = os.clock() + ERWIN_INTERVAL
+    while isErwinRunning do
+        local remain = deadline - os.clock()
+        if remain <= 0 then
+            break
+        end
+        if not isUnitStillPlaced(targetUnit) then
+            return false
+        end
+        erwinStepRemain = remain
+        erwinUI.countdownLabel.Text = string.format("Erwin #%d buffing (%.1fs)", stepIndex, remain)
         task.wait(0.1)
-        timer = timer - 0.1
     end
+    erwinStepRemain = 0
+    return isErwinRunning
 end
 
 local function startErwinRotation()
     if erwinThread then
-        task.cancel(erwinThread)
+        pcall(task.cancel, erwinThread)
         erwinThread = nil
     end
 
     erwinThread = task.spawn(function()
         while isErwinRunning do
-            lockedErwins = getMyUnitsByNames(ERWIN_NAMES, ERWIN_REQUIRED)
-
             if #lockedErwins < ERWIN_REQUIRED then
-                erwinUI.countdownLabel.Text = "Waiting for units..."
-                erwinUI.stateLabel.Text = string.format("Placed: %d/%d Erwin (need 4)", #lockedErwins, ERWIN_REQUIRED)
-                currentActiveErwin = 0
-                erwinStepRemain = 0
-                task.wait(0.5)
+                local fresh = getMyUnitsByNames(ERWIN_NAMES, ERWIN_REQUIRED, false)
+                if #fresh < ERWIN_REQUIRED then
+                    erwinUI.countdownLabel.Text = "Waiting for units..."
+                    erwinUI.stateLabel.Text = string.format("Placed: %d/%d Erwin (need 4)", #fresh, ERWIN_REQUIRED)
+                    currentActiveErwin = 0
+                    erwinStepRemain = 0
+                    task.wait(0.3)
+                else
+                    lockedErwins = fresh
+                end
             else
-                executeErwinStep(1)
-                executeErwinStep(2)
-                executeErwinStep(3)
-                executeErwinStep(4)
+                for idx = 1, ERWIN_REQUIRED do
+                    if not executeErwinStep(idx) then
+                        lockedErwins = {}
+                        currentActiveErwin = 0
+                        erwinStepRemain = 0
+                        break
+                    end
+                end
             end
         end
     end)
 end
 
-task.spawn(function()
+trackThread(function()
     while true do
-        local units = #lockedErwins > 0 and lockedErwins or getMyUnitsByNames(ERWIN_NAMES, ERWIN_REQUIRED)
+        local units = (#lockedErwins == ERWIN_REQUIRED) and lockedErwins or getMyUnitsByNames(ERWIN_NAMES, ERWIN_REQUIRED, false)
         updateErwinDisplay(units)
         if not isErwinRunning then
             erwinUI.countdownLabel.Text = "Cooldown: Stopped"
@@ -3024,14 +3258,15 @@ task.spawn(function()
 end)
 
 local function executeWendyStep(stepIndex)
-    if not isWendyRunning then return end
+    if not isWendyRunning then return false end
+
+    local targetUnit = lockedWendys[stepIndex]
+    if not isUnitStillPlaced(targetUnit) then
+        return false
+    end
 
     currentActiveWendy = stepIndex
-    local targetUnit = lockedWendys[stepIndex]
-
-    if targetUnit and targetUnit.Parent and targetUnit:IsDescendantOf(workspace) then
-        castSkill(targetUnit)
-    end
+    castSkill(targetUnit)
 
     if stepIndex == 1 then
         wendyUI.stateLabel.Text = "Unit #1 buffs units 2, 3, and 4"
@@ -3043,44 +3278,59 @@ local function executeWendyStep(stepIndex)
         wendyUI.stateLabel.Text = "Unit #4 buffs units 1, 2, and 3"
     end
 
-    local timer = WENDY_INTERVAL
-    while isWendyRunning and timer > 0 do
-        wendyStepRemain = timer
-        wendyUI.countdownLabel.Text = string.format("Wendy #%d buffing (%.1fs)", stepIndex, timer)
+    local deadline = os.clock() + WENDY_INTERVAL
+    while isWendyRunning do
+        local remain = deadline - os.clock()
+        if remain <= 0 then
+            break
+        end
+        if not isUnitStillPlaced(targetUnit) then
+            return false
+        end
+        wendyStepRemain = remain
+        wendyUI.countdownLabel.Text = string.format("Wendy #%d buffing (%.1fs)", stepIndex, remain)
         task.wait(0.1)
-        timer = timer - 0.1
     end
+    wendyStepRemain = 0
+    return isWendyRunning
 end
 
 local function startWendyRotation()
     if wendyThread then
-        task.cancel(wendyThread)
+        pcall(task.cancel, wendyThread)
         wendyThread = nil
     end
 
     wendyThread = task.spawn(function()
         while isWendyRunning do
-            lockedWendys = getMyUnitsByNames(WENDY_NAMES, WENDY_REQUIRED)
-
             if #lockedWendys < WENDY_REQUIRED then
-                wendyUI.countdownLabel.Text = "Waiting for units..."
-                wendyUI.stateLabel.Text = string.format("Placed: %d/%d Wendy (need 4)", #lockedWendys, WENDY_REQUIRED)
-                currentActiveWendy = 0
-                wendyStepRemain = 0
-                task.wait(0.5)
+                local fresh = getMyUnitsByNames(WENDY_NAMES, WENDY_REQUIRED, false)
+                if #fresh < WENDY_REQUIRED then
+                    wendyUI.countdownLabel.Text = "Waiting for units..."
+                    wendyUI.stateLabel.Text = string.format("Placed: %d/%d Wendy (need 4)", #fresh, WENDY_REQUIRED)
+                    currentActiveWendy = 0
+                    wendyStepRemain = 0
+                    task.wait(0.3)
+                else
+                    lockedWendys = fresh
+                end
             else
-                executeWendyStep(1)
-                executeWendyStep(2)
-                executeWendyStep(3)
-                executeWendyStep(4)
+                for idx = 1, WENDY_REQUIRED do
+                    if not executeWendyStep(idx) then
+                        lockedWendys = {}
+                        currentActiveWendy = 0
+                        wendyStepRemain = 0
+                        break
+                    end
+                end
             end
         end
     end)
 end
 
-task.spawn(function()
+trackThread(function()
     while true do
-        local units = #lockedWendys > 0 and lockedWendys or getMyUnitsByNames(WENDY_NAMES, WENDY_REQUIRED)
+        local units = (#lockedWendys == WENDY_REQUIRED) and lockedWendys or getMyUnitsByNames(WENDY_NAMES, WENDY_REQUIRED, false)
         updateWendyDisplay(units)
         if not isWendyRunning then
             wendyUI.countdownLabel.Text = "Cooldown: Stopped"
@@ -3091,14 +3341,15 @@ task.spawn(function()
 end)
 
 local function executeLeafaStep(stepIndex)
-    if not isLeafaRunning then return end
+    if not isLeafaRunning then return false end
+
+    local targetUnit = lockedLeafas[stepIndex]
+    if not isUnitStillPlaced(targetUnit) then
+        return false
+    end
 
     currentActiveLeafa = stepIndex
-    local targetUnit = lockedLeafas[stepIndex]
-
-    if targetUnit and targetUnit.Parent and targetUnit:IsDescendantOf(workspace) then
-        castSkill(targetUnit)
-    end
+    castSkill(targetUnit)
 
     if stepIndex == 1 then
         leafaUI.stateLabel.Text = "Unit #1 buffs units 2, 3, and 4"
@@ -3110,44 +3361,59 @@ local function executeLeafaStep(stepIndex)
         leafaUI.stateLabel.Text = "Unit #4 buffs units 1, 2, and 3"
     end
 
-    local timer = LEAFA_INTERVAL
-    while isLeafaRunning and timer > 0 do
-        leafaStepRemain = timer
-        leafaUI.countdownLabel.Text = string.format("Leafa #%d buffing (%.1fs)", stepIndex, timer)
+    local deadline = os.clock() + LEAFA_INTERVAL
+    while isLeafaRunning do
+        local remain = deadline - os.clock()
+        if remain <= 0 then
+            break
+        end
+        if not isUnitStillPlaced(targetUnit) then
+            return false
+        end
+        leafaStepRemain = remain
+        leafaUI.countdownLabel.Text = string.format("Leafa #%d buffing (%.1fs)", stepIndex, remain)
         task.wait(0.1)
-        timer = timer - 0.1
     end
+    leafaStepRemain = 0
+    return isLeafaRunning
 end
 
 local function startLeafaRotation()
     if leafaThread then
-        task.cancel(leafaThread)
+        pcall(task.cancel, leafaThread)
         leafaThread = nil
     end
 
     leafaThread = task.spawn(function()
         while isLeafaRunning do
-            lockedLeafas = getMyUnitsByNames(LEAFA_NAMES, LEAFA_REQUIRED)
-
             if #lockedLeafas < LEAFA_REQUIRED then
-                leafaUI.countdownLabel.Text = "Waiting for units..."
-                leafaUI.stateLabel.Text = string.format("Placed: %d/%d Leafa (need 4)", #lockedLeafas, LEAFA_REQUIRED)
-                currentActiveLeafa = 0
-                leafaStepRemain = 0
-                task.wait(0.5)
+                local fresh = getMyUnitsByNames(LEAFA_NAMES, LEAFA_REQUIRED, false)
+                if #fresh < LEAFA_REQUIRED then
+                    leafaUI.countdownLabel.Text = "Waiting for units..."
+                    leafaUI.stateLabel.Text = string.format("Placed: %d/%d Leafa (need 4)", #fresh, LEAFA_REQUIRED)
+                    currentActiveLeafa = 0
+                    leafaStepRemain = 0
+                    task.wait(0.3)
+                else
+                    lockedLeafas = fresh
+                end
             else
-                executeLeafaStep(1)
-                executeLeafaStep(2)
-                executeLeafaStep(3)
-                executeLeafaStep(4)
+                for idx = 1, LEAFA_REQUIRED do
+                    if not executeLeafaStep(idx) then
+                        lockedLeafas = {}
+                        currentActiveLeafa = 0
+                        leafaStepRemain = 0
+                        break
+                    end
+                end
             end
         end
     end)
 end
 
-task.spawn(function()
+trackThread(function()
     while true do
-        local units = #lockedLeafas > 0 and lockedLeafas or getMyUnitsByNames(LEAFA_NAMES, LEAFA_REQUIRED)
+        local units = (#lockedLeafas == LEAFA_REQUIRED) and lockedLeafas or getMyUnitsByNames(LEAFA_NAMES, LEAFA_REQUIRED, false)
         updateLeafaDisplay(units)
         if not isLeafaRunning then
             leafaUI.countdownLabel.Text = "Cooldown: Stopped"
@@ -3187,7 +3453,7 @@ erwinUI.toggleBtn.MouseButton1Click:Connect(function()
         currentActiveErwin = 0
         erwinStepRemain = 0
         lockedErwins = {}
-        if erwinThread then task.cancel(erwinThread) erwinThread = nil end
+        if erwinThread then pcall(task.cancel, erwinThread) erwinThread = nil end
     end
 end)
 
@@ -3205,7 +3471,7 @@ wendyUI.toggleBtn.MouseButton1Click:Connect(function()
         currentActiveWendy = 0
         wendyStepRemain = 0
         lockedWendys = {}
-        if wendyThread then task.cancel(wendyThread) wendyThread = nil end
+        if wendyThread then pcall(task.cancel, wendyThread) wendyThread = nil end
     end
 end)
 
@@ -3223,7 +3489,7 @@ leafaUI.toggleBtn.MouseButton1Click:Connect(function()
         currentActiveLeafa = 0
         leafaStepRemain = 0
         lockedLeafas = {}
-        if leafaThread then task.cancel(leafaThread) leafaThread = nil end
+        if leafaThread then pcall(task.cancel, leafaThread) leafaThread = nil end
     end
 end)
 
@@ -3374,6 +3640,28 @@ table.insert(SpoofConnections, RunService.Heartbeat:Connect(function(dt)
         end
     end
 end))
+
+ENV.__MonSkillHubCleanup = function()
+    for _, conn in ipairs(SpoofConnections) do
+        pcall(function()
+            conn:Disconnect()
+        end)
+    end
+    SpoofConnections = {}
+
+    for _, t in ipairs(ActiveThreads) do
+        pcall(task.cancel, t)
+    end
+    ActiveThreads = {}
+
+    if erwinThread then pcall(task.cancel, erwinThread) erwinThread = nil end
+    if wendyThread then pcall(task.cancel, wendyThread) wendyThread = nil end
+    if leafaThread then pcall(task.cancel, leafaThread) leafaThread = nil end
+
+    if screenGui and screenGui.Parent then
+        screenGui:Destroy()
+    end
+end
 
 if isErwinRunning then startErwinRotation() end
 if isWendyRunning then startWendyRotation() end
